@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Dithering Studio</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+  <aside class="panel left">
+    <header class="brand">
+      <h1>Dithering Studio</h1>
+      <p class="muted">Upload an image, GIF, or video. Tune the dither.</p>
+    </header>
+
+    <section class="group">
+      <h2>Source</h2>
+      <label class="file-btn" id="fileBtn">
+        <input type="file" id="srcFile" accept="image/*,video/*,.gif" />
+        <span>Choose file</span>
+        <span class="hint">or drag &amp; drop here</span>
+      </label>
+      <div id="srcInfo" class="muted small">No file loaded</div>
+      <div class="row">
+        <button id="playBtn" class="ghost" disabled>Play</button>
+        <button id="pauseBtn" class="ghost" disabled>Pause</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Export</h2>
+      <div class="row">
+        <label class="check" style="flex:1;">
+          <input type="checkbox" id="exportNoBg" />
+          Transparent background (alpha)
+        </label>
+      </div>
+      <div class="row">
+        <button id="exportImage" class="primary">Download image (PNG)</button>
+      </div>
+      <div class="row">
+        <button id="exportVideo" class="primary" disabled>Record animation (WebM)</button>
+        <button id="stopRecord" class="ghost" disabled>Stop</button>
+      </div>
+      <div id="exportStatus" class="muted small"></div>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <div class="stage-inner">
+      <canvas id="view"></canvas>
+    </div>
+    <footer class="stagebar muted small">
+      <span id="fpsLabel">— fps</span>
+      <span class="zoom-controls">
+        <button id="zoomOut" class="ghost" title="Zoom out">−</button>
+        <span id="zoomLabel" class="num">100%</span>
+        <button id="zoomIn" class="ghost" title="Zoom in">+</button>
+        <button id="zoomReset" class="ghost" title="Reset zoom">Fit</button>
+      </span>
+      <span id="dimsLabel">—</span>
+    </footer>
+  </main>
+
+  <aside class="panel right">
+    <section class="group first">
+      <h2>Presets</h2>
+      <div class="row">
+        <label>Built-in</label>
+        <select id="starterPreset"></select>
+      </div>
+      <div class="row">
+        <label>Saved</label>
+        <select id="savedPreset">
+          <option value="">— none saved —</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="savePreset" class="ghost">Save current as…</button>
+        <button id="deletePreset" class="ghost" disabled>Delete</button>
+      </div>
+      <div class="row">
+        <button id="exportPresets" class="ghost">Export my presets</button>
+        <button id="importPresets" class="ghost">Import…</button>
+        <input type="file" id="importPresetsFile" accept="application/json,.json" hidden />
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Canvas</h2>
+      <div class="row">
+        <label>Aspect</label>
+        <select id="aspect">
+          <option value="original">Original</option>
+          <option value="1:1">1 : 1</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Grid resolution</label>
+        <input type="range" id="grid" min="8" max="300" value="80" />
+        <span id="gridVal" class="num">80</span>
+      </div>
+      <div class="row">
+        <label>Background</label>
+        <input type="color" id="bgColor" value="#0a0a0a" />
+        <label class="check"><input type="checkbox" id="bgOn" checked /> on</label>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Highlight states</h2>
+      <p class="muted small">Top row = shadow. Bottom = highlight. Click the tile to upload an SVG. The toggle on the right enables / disables the state.</p>
+      <div id="slots" class="slots"></div>
+      <div class="row">
+        <button id="resetSlots" class="ghost">Reset to default ramp</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Shape</h2>
+      <div class="row">
+        <label>Invert</label>
+        <label class="check"><input type="checkbox" id="invert" /> flip luminance</label>
+      </div>
+      <div class="row">
+        <label>Scale min</label>
+        <input type="range" id="scaleMin" min="0" max="200" value="40" />
+        <span id="scaleMinVal" class="num">40%</span>
+      </div>
+      <div class="row">
+        <label>Scale max</label>
+        <input type="range" id="scaleMax" min="0" max="200" value="100" />
+        <span id="scaleMaxVal" class="num">100%</span>
+      </div>
+      <div class="row">
+        <label>Rotation</label>
+        <select id="rotation">
+          <option value="0">0°</option>
+          <option value="90">90°</option>
+          <option value="180">180°</option>
+          <option value="270">270°</option>
+        </select>
+        <label class="check"><input type="checkbox" id="randomRot" /> random / cell</label>
+      </div>
+    </section>
+  </aside>
+</div>
+
+<canvas id="src" hidden></canvas>
+<video id="vid" hidden playsinline muted loop></video>
+
+<script src="app.js?v=8" type="module"></script>
+</body>
+</html>

@@ -1,0 +1,1069 @@
+// Dithering Studio — single-file vanilla app.
+
+// Guard against duplicate execution — if some host (HMR, eval re-injection,
+// embedding) re-imports this module, we don't want to double-bind listeners.
+if (window.__ditherStudioLoaded) {
+  console.warn('Dithering Studio already loaded — skipping duplicate init.');
+  throw new Error('Dithering Studio already initialized in this window.');
+}
+window.__ditherStudioLoaded = true;
+
+// ---------- defaults ----------
+const DEFAULT_SVGS = [
+  // 0 shadow → 6 highlight: dot ramp then square
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="4" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="12" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="20" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="28" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="36" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="46" fill="currentColor"/></svg>',
+  '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><rect x="0" y="0" width="100" height="100" fill="currentColor"/></svg>',
+];
+const DEFAULT_COLORS = ['#ffffff','#ffffff','#ffffff','#ffffff','#ffffff','#ffffff','#ffffff'];
+
+// ---------- shape ramps for starter presets ----------
+// NOTE: xmlns is required for `new Image()` to decode these as SVG when loaded
+// as a Blob URL. Without it, rebuildShapeCache() throws and no render happens.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const svg = (inner) =>
+  `<svg viewBox="0 0 100 100" xmlns="${SVG_NS}">${inner}</svg>`;
+const PLUS_RAMP = [
+  svg('<rect x="46" y="46" width="8" height="8" fill="currentColor"/>'),
+  svg('<rect x="42" y="35" width="16" height="30" fill="currentColor"/><rect x="35" y="42" width="30" height="16" fill="currentColor"/>'),
+  svg('<rect x="40" y="25" width="20" height="50" fill="currentColor"/><rect x="25" y="40" width="50" height="20" fill="currentColor"/>'),
+  svg('<rect x="38" y="15" width="24" height="70" fill="currentColor"/><rect x="15" y="38" width="70" height="24" fill="currentColor"/>'),
+  svg('<rect x="35" y="5" width="30" height="90" fill="currentColor"/><rect x="5" y="35" width="90" height="30" fill="currentColor"/>'),
+  svg('<rect x="30" y="0" width="40" height="100" fill="currentColor"/><rect x="0" y="30" width="100" height="40" fill="currentColor"/>'),
+  svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
+];
+const DIAMOND_RAMP = [
+  svg('<polygon points="50,46 54,50 50,54 46,50" fill="currentColor"/>'),
+  svg('<polygon points="50,38 62,50 50,62 38,50" fill="currentColor"/>'),
+  svg('<polygon points="50,28 72,50 50,72 28,50" fill="currentColor"/>'),
+  svg('<polygon points="50,18 82,50 50,82 18,50" fill="currentColor"/>'),
+  svg('<polygon points="50,10 90,50 50,90 10,50" fill="currentColor"/>'),
+  svg('<polygon points="50,2 98,50 50,98 2,50" fill="currentColor"/>'),
+  svg('<polygon points="50,0 100,50 50,100 0,50" fill="currentColor"/>'),
+];
+const BAR_RAMP = [
+  svg('<rect x="10" y="48" width="80" height="4" fill="currentColor"/>'),
+  svg('<rect x="5" y="44" width="90" height="12" fill="currentColor"/>'),
+  svg('<rect x="0" y="40" width="100" height="20" fill="currentColor"/>'),
+  svg('<rect x="0" y="34" width="100" height="32" fill="currentColor"/>'),
+  svg('<rect x="0" y="26" width="100" height="48" fill="currentColor"/>'),
+  svg('<rect x="0" y="14" width="100" height="72" fill="currentColor"/>'),
+  svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
+];
+const TRI_RAMP = [
+  svg('<polygon points="50,46 55,55 45,55" fill="currentColor"/>'),
+  svg('<polygon points="50,38 62,60 38,60" fill="currentColor"/>'),
+  svg('<polygon points="50,28 70,68 30,68" fill="currentColor"/>'),
+  svg('<polygon points="50,18 80,80 20,80" fill="currentColor"/>'),
+  svg('<polygon points="50,10 88,88 12,88" fill="currentColor"/>'),
+  svg('<polygon points="50,2 96,96 4,96" fill="currentColor"/>'),
+  svg('<polygon points="50,0 100,100 0,100" fill="currentColor"/>'),
+];
+// Full-width horizontal bars, growing in thickness, occupying the full cell so
+// adjacent same-state cells form continuous lines (riso/scanline aesthetic).
+const LINE_RAMP = [
+  svg('<rect x="0" y="49.5" width="100" height="1" fill="currentColor"/>'),
+  svg('<rect x="0" y="47" width="100" height="6" fill="currentColor"/>'),
+  svg('<rect x="0" y="43" width="100" height="14" fill="currentColor"/>'),
+  svg('<rect x="0" y="37" width="100" height="26" fill="currentColor"/>'),
+  svg('<rect x="0" y="29" width="100" height="42" fill="currentColor"/>'),
+  svg('<rect x="0" y="15" width="100" height="70" fill="currentColor"/>'),
+  svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
+];
+
+// ---------- Serpier-branded presets ----------
+// Drop new Serpier looks in here. Same shape as BUILTIN_PRESETS below.
+// They appear under a "Serpier" group in the preset dropdown.
+const SERPIER_PRESETS = {
+  // example:
+  // serpierMono: {
+  //   label: 'Serpier Mono',
+  //   settings: { gridCells: 90, aspect: 'original', bgOn: true, bgColor: '#000',
+  //     svgs: [...DEFAULT_SVGS],
+  //     colors: Array(7).fill('#ff6b1a'),
+  //     enabled: [true,true,true,true,true,true,true],
+  //     invert: false, scaleMin: 0.3, scaleMax: 1.0,
+  //     rotation: 0, randomRot: false,
+  //   },
+  // },
+};
+
+// ---------- generic built-in presets ----------
+const BUILTIN_PRESETS = {
+  halftone: {
+    label: 'Halftone Print',
+    settings: {
+      gridCells: 100, aspect: 'original',
+      bgOn: true, bgColor: '#f4ead5',
+      svgs: [...DEFAULT_SVGS],
+      colors: ['#1a1a1a','#1a1a1a','#1a1a1a','#1a1a1a','#1a1a1a','#1a1a1a','#1a1a1a'],
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.3, scaleMax: 0.95,
+      rotation: 0, randomRot: false,
+    },
+  },
+  cross: {
+    label: 'Pixel Cross',
+    settings: {
+      gridCells: 60, aspect: '1:1',
+      bgOn: true, bgColor: '#0a0e2a',
+      svgs: [...PLUS_RAMP],
+      colors: ['#7fff5e','#7fff5e','#7fff5e','#7fff5e','#7fff5e','#7fff5e','#7fff5e'],
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.5, scaleMax: 0.95,
+      rotation: 0, randomRot: true,
+    },
+  },
+  diamond: {
+    label: 'Diamond Cascade',
+    settings: {
+      gridCells: 90, aspect: 'original',
+      bgOn: true, bgColor: '#1a0033',
+      svgs: [...DIAMOND_RAMP],
+      colors: ['#2c5fff','#5e7fff','#a35eff','#ff5ee0','#ff8e5e','#5effe6','#a5ffea'],
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.4, scaleMax: 1.1,
+      rotation: 0, randomRot: false,
+    },
+  },
+  brutalist: {
+    label: 'Brutalist Bars',
+    settings: {
+      gridCells: 45, aspect: 'original',
+      bgOn: true, bgColor: '#000000',
+      svgs: [...BAR_RAMP],
+      colors: ['#ffffff','#ffffff','#ffffff','#ffffff','#ffffff','#ffffff','#ffffff'],
+      enabled: [false,true,true,true,true,true,false],
+      invert: false, scaleMin: 0.55, scaleMax: 1.0,
+      rotation: 0, randomRot: true,
+    },
+  },
+  glitch: {
+    label: 'Glitch Triangles',
+    settings: {
+      gridCells: 80, aspect: 'original',
+      bgOn: true, bgColor: '#007373',
+      svgs: [...TRI_RAMP],
+      colors: ['#ffffff','#ffea00','#ffffff','#ffea00','#ffffff','#ffea00','#ffffff'],
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.3, scaleMax: 1.1,
+      rotation: 0, randomRot: true,
+    },
+  },
+  riso: {
+    label: 'Riso Lines',
+    settings: {
+      // Scanline / risograph effect: every cell is a full-width horizontal bar,
+      // varying in thickness with luminance. Invert so dark source areas fill
+      // solid and light areas leave the cream paper showing.
+      gridCells: 80, aspect: 'original',
+      bgOn: true, bgColor: '#f0e8d4',
+      svgs: [...LINE_RAMP],
+      colors: ['#1a3eb8','#1a3eb8','#1a3eb8','#1a3eb8','#1a3eb8','#1a3eb8','#1a3eb8'],
+      enabled: [true,true,true,true,true,true,true],
+      invert: true,
+      scaleMin: 1.0, scaleMax: 1.0,
+      rotation: 0, randomRot: false,
+    },
+  },
+};
+
+// ---------- state ----------
+const state = {
+  source: null, // { type, width, height, element|frames, ... }
+  gridCells: 80,
+  aspect: 'original',
+  bgOn: true,
+  bgColor: '#0a0a0a',
+  svgs: [...DEFAULT_SVGS],
+  colors: [...DEFAULT_COLORS],
+  enabled: [true, true, true, true, true, true, true],
+  invert: false,
+  scaleMin: 0.4,
+  scaleMax: 1.0,
+  rotation: 0,
+  randomRot: false,
+  exportNoBg: false,
+};
+if (typeof window !== 'undefined') window.__state = state;
+
+// Pre-rasterized tile per highlight state, recoloured on demand. 512 keeps
+// shape edges crisp when scaled up to large cell sizes.
+const SHAPE_TILE = 512;
+const shapeCache = new Array(7).fill(null);
+
+// ---------- DOM ----------
+const $ = (id) => document.getElementById(id);
+const view = $('view');
+const vctx = view.getContext('2d');
+vctx.imageSmoothingEnabled = true;
+vctx.imageSmoothingQuality = 'high';
+const srcCanvas = $('src');
+const sctx = srcCanvas.getContext('2d', { willReadFrequently: true });
+const vid = $('vid');
+
+// ---------- SVG colour injection ----------
+const SVG_VISIBLE = new Set(['path','rect','circle','ellipse','polygon','polyline','line']);
+const parser = new DOMParser();
+const serializer = new XMLSerializer();
+
+function injectColor(svgText, color) {
+  let doc;
+  try {
+    doc = parser.parseFromString(svgText, 'image/svg+xml');
+  } catch {
+    return svgText;
+  }
+  const root = doc.documentElement;
+  if (!root || root.nodeName.toLowerCase() !== 'svg') return svgText;
+
+  // Defensive: ensure xmlns is set so the SVG decodes when loaded via
+  // `new Image()` from a Blob URL with image/svg+xml mime.
+  if (!root.hasAttribute('xmlns')) {
+    root.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  }
+
+  // root colour (for currentColor users)
+  const existing = root.getAttribute('style') || '';
+  root.setAttribute('style', existing.replace(/color\s*:[^;]+;?/i,'') + `;color:${color}`);
+
+  // Walk visible shapes; if fill !== none, set to colour; same for stroke.
+  const walk = (node) => {
+    if (node.nodeType !== 1) return;
+    const name = node.nodeName.toLowerCase();
+    if (SVG_VISIBLE.has(name) || name === 'g') {
+      const fill = (node.getAttribute('fill') || '').trim().toLowerCase();
+      const styleAttr = node.getAttribute('style') || '';
+      const styleFill = /fill\s*:\s*([^;]+)/i.exec(styleAttr);
+      const fillVal = styleFill ? styleFill[1].trim().toLowerCase() : fill;
+      if (fillVal !== 'none') {
+        node.setAttribute('fill', color);
+        if (styleFill) {
+          node.setAttribute('style', styleAttr.replace(/fill\s*:[^;]+;?/i, `fill:${color};`));
+        }
+      }
+      const stroke = (node.getAttribute('stroke') || '').trim().toLowerCase();
+      const styleStroke = /stroke\s*:\s*([^;]+)/i.exec(styleAttr);
+      const strokeVal = styleStroke ? styleStroke[1].trim().toLowerCase() : stroke;
+      if (strokeVal && strokeVal !== 'none') {
+        node.setAttribute('stroke', color);
+      }
+    }
+    for (const c of node.children) walk(c);
+  };
+  walk(root);
+
+  // Strip <style> blocks that could override (best-effort).
+  doc.querySelectorAll('style').forEach((s) => s.remove());
+
+  return serializer.serializeToString(doc);
+}
+
+function rasterizeShape(idx) {
+  return new Promise((resolve, reject) => {
+    const svg = injectColor(state.svgs[idx], state.colors[idx]);
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = c.height = SHAPE_TILE;
+      const cx = c.getContext('2d');
+      cx.drawImage(img, 0, 0, SHAPE_TILE, SHAPE_TILE);
+      URL.revokeObjectURL(url);
+      resolve(c);
+    };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+}
+
+async function rebuildShapeCache(only = null) {
+  if (only !== null) {
+    try { shapeCache[only] = await rasterizeShape(only); }
+    catch (e) { console.warn(`Shape ${only} failed to rasterize:`, e); shapeCache[only] = null; }
+  } else {
+    const out = await Promise.allSettled([0,1,2,3,4,5,6].map(rasterizeShape));
+    for (let i = 0; i < 7; i++) {
+      if (out[i].status === 'fulfilled') shapeCache[i] = out[i].value;
+      else { console.warn(`Shape ${i} failed:`, out[i].reason); shapeCache[i] = null; }
+    }
+  }
+}
+
+// ---------- slot UI ----------
+const slotsEl = $('slots');
+function renderSlots() {
+  slotsEl.innerHTML = '';
+  for (let i = 0; i < 7; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'slot' + (state.enabled[i] ? '' : ' off');
+    slot.innerHTML = `
+      <span class="idx">${i+1}</span>
+      <label class="upload" title="Click to upload an SVG for state ${i+1}">
+        <div class="preview"></div>
+        <input type="file" accept=".svg,image/svg+xml" />
+      </label>
+      <label class="swatch" title="Change colour of state ${i+1}" style="background:${state.colors[i]}">
+        <input type="color" value="${state.colors[i]}" />
+      </label>
+      <button class="toggle" type="button" title="Toggle state ${i+1}">${state.enabled[i] ? '✓' : '×'}</button>
+    `;
+    const preview = slot.querySelector('.preview');
+    const swatch = slot.querySelector('.swatch');
+    const toggle = slot.querySelector('.toggle');
+    preview.innerHTML = injectColor(state.svgs[i], state.colors[i]);
+    const fileIn = slot.querySelector('input[type="file"]');
+    const colorIn = slot.querySelector('input[type="color"]');
+    fileIn.addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const text = await f.text();
+      state.svgs[i] = text;
+      preview.innerHTML = injectColor(state.svgs[i], state.colors[i]);
+      await rebuildShapeCache(i);
+      requestRender();
+    });
+    colorIn.addEventListener('input', async (e) => {
+      state.colors[i] = e.target.value;
+      swatch.style.background = e.target.value;
+      preview.innerHTML = injectColor(state.svgs[i], state.colors[i]);
+      await rebuildShapeCache(i);
+      requestRender();
+    });
+    toggle.addEventListener('click', (e) => {
+      e.preventDefault();
+      state.enabled[i] = !state.enabled[i];
+      slot.classList.toggle('off', !state.enabled[i]);
+      toggle.textContent = state.enabled[i] ? '✓' : '×';
+      requestRender();
+    });
+    slotsEl.appendChild(slot);
+  }
+}
+
+// ---------- source loading ----------
+function disposeSource() {
+  if (state.source?.type === 'video') {
+    vid.pause();
+    if (state.source.objectUrl) URL.revokeObjectURL(state.source.objectUrl);
+    vid.removeAttribute('src');
+    vid.load();
+  }
+  state.source = null;
+  $('playBtn').disabled = true;
+  $('pauseBtn').disabled = true;
+  $('exportVideo').disabled = true;
+}
+
+async function loadFile(file) {
+  disposeSource();
+  const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+  const isVideo = file.type.startsWith('video/');
+  const isImage = file.type.startsWith('image/') && !isGif;
+  try {
+    if (isGif) {
+      await loadGif(file);
+    } else if (isVideo) {
+      await loadVideo(file);
+    } else if (isImage) {
+      await loadImage(file);
+    } else {
+      throw new Error('Unsupported file');
+    }
+    $('srcInfo').textContent = `${file.name} — ${state.source.width}×${state.source.height}${state.source.type !== 'image' ? ` · ${state.source.type}` : ''}`;
+    requestRender();
+  } catch (e) {
+    $('srcInfo').textContent = `Failed to load: ${e.message || e}`;
+  }
+}
+
+async function loadImage(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+  state.source = { type: 'image', element: img, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url };
+}
+
+async function loadGif(file) {
+  if (typeof ImageDecoder === 'undefined') {
+    await loadImage(file);
+    state.source.type = 'image';
+    return;
+  }
+  const buf = await file.arrayBuffer();
+  let dec, track, count;
+  try {
+    dec = new ImageDecoder({ data: buf, type: 'image/gif' });
+    // Tracks become non-null only after `tracks.ready`. `completed` waits for
+    // frame data but does not guarantee a selected track yet.
+    if (dec.tracks?.ready) await dec.tracks.ready;
+    track = dec.tracks?.selectedTrack;
+    if (!track) throw new Error('no track');
+    count = track.frameCount;
+    if (!count || count < 1) throw new Error('no frames');
+  } catch (e) {
+    // Not a decodable animated GIF — fall back to static image.
+    console.warn('GIF decode failed, falling back to still image:', e);
+    await loadImage(file);
+    state.source.type = 'image';
+    return;
+  }
+  const frames = [];
+  for (let i = 0; i < count; i++) {
+    try {
+      const { image, duration } = await dec.decode({ frameIndex: i });
+      const c = document.createElement('canvas');
+      c.width = image.displayWidth;
+      c.height = image.displayHeight;
+      c.getContext('2d').drawImage(image, 0, 0);
+      const ms = duration ? duration / 1000 : 100; // µs → ms
+      frames.push({ canvas: c, duration: Math.max(20, ms) });
+      image.close();
+    } catch (e) {
+      console.warn(`GIF frame ${i} failed to decode, skipping:`, e);
+    }
+  }
+  if (!frames.length) {
+    await loadImage(file);
+    state.source.type = 'image';
+    return;
+  }
+  state.source = {
+    type: 'gif',
+    frames,
+    width: frames[0].canvas.width,
+    height: frames[0].canvas.height,
+    frameIdx: 0,
+    playing: true,
+    lastTick: performance.now(),
+  };
+  $('playBtn').disabled = false;
+  $('pauseBtn').disabled = false;
+  $('exportVideo').disabled = false;
+}
+
+async function loadVideo(file) {
+  const url = URL.createObjectURL(file);
+  vid.src = url;
+  // loadedmetadata fires when dimensions are known; loadeddata fires when a
+  // frame is actually drawable. Need the latter before drawImage() works.
+  await new Promise((res, rej) => {
+    const onMeta = () => { cleanup(); res(); };
+    const onErr = () => {
+      cleanup();
+      const code = vid.error?.code;
+      const msg = ({1:'aborted', 2:'network', 3:'decode', 4:'codec/format not supported by this browser'})[code] || 'unknown';
+      rej(new Error(`video load failed (${msg})`));
+    };
+    const cleanup = () => { vid.removeEventListener('loadedmetadata', onMeta); vid.removeEventListener('error', onErr); };
+    vid.addEventListener('loadedmetadata', onMeta);
+    vid.addEventListener('error', onErr);
+  });
+  if (vid.readyState < 2) {
+    await new Promise((res, rej) => {
+      const onData = () => { cleanup(); res(); };
+      const onErr = () => { cleanup(); rej(new Error('video data load error')); };
+      const cleanup = () => { vid.removeEventListener('loadeddata', onData); vid.removeEventListener('error', onErr); };
+      vid.addEventListener('loadeddata', onData);
+      vid.addEventListener('error', onErr);
+    });
+  }
+  state.source = {
+    type: 'video',
+    element: vid,
+    width: vid.videoWidth,
+    height: vid.videoHeight,
+    objectUrl: url,
+    playing: false,
+  };
+  $('playBtn').disabled = false;
+  $('pauseBtn').disabled = false;
+  $('exportVideo').disabled = false;
+  // Render the first frame immediately so the user sees the video even if
+  // autoplay is blocked. If play succeeds, the tick loop drives subsequent frames.
+  requestRender();
+  try { await vid.play(); state.source.playing = true; } catch {}
+  // Re-render even if play was blocked so the seek to t=0 is visible.
+  requestRender();
+}
+
+// ---------- render ----------
+let renderScheduled = false;
+function requestRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    renderOnce();
+  });
+}
+
+function currentFrameSource() {
+  if (!state.source) return null;
+  if (state.source.type === 'image') return state.source.element;
+  if (state.source.type === 'video') return state.source.element;
+  if (state.source.type === 'gif') {
+    return state.source.frames[state.source.frameIdx].canvas;
+  }
+  return null;
+}
+
+function renderOnce() {
+  const fs = currentFrameSource();
+  if (!fs) return;
+  drawFrame(fs);
+  $('dimsLabel').textContent = `${view.width}×${view.height} · ${state.source.width}×${state.source.height} src`;
+}
+
+const MAX_OUTPUT_DIM = 1280;
+
+function drawFrame(frameSource) {
+  if (!state.source) return;
+  const sw = state.source.width;
+  const sh = state.source.height;
+  // Output aspect
+  let aspectW, aspectH;
+  if (state.aspect === '1:1') { aspectW = 1; aspectH = 1; }
+  else { aspectW = sw; aspectH = sh; }
+
+  const longCells = state.gridCells;
+  let cellsX, cellsY;
+  if (aspectW >= aspectH) {
+    cellsX = longCells;
+    cellsY = Math.max(1, Math.round(longCells * (aspectH / aspectW)));
+  } else {
+    cellsY = longCells;
+    cellsX = Math.max(1, Math.round(longCells * (aspectW / aspectH)));
+  }
+  const cellPx = Math.max(2, Math.floor(MAX_OUTPUT_DIM / Math.max(cellsX, cellsY)));
+  const W = cellsX * cellPx;
+  const H = cellsY * cellPx;
+  if (view.width !== W) view.width = W;
+  if (view.height !== H) view.height = H;
+  // Canvas state resets when dimensions change — re-apply smoothing each frame.
+  vctx.imageSmoothingEnabled = true;
+  vctx.imageSmoothingQuality = 'high';
+
+  // Sample source into srcCanvas at cellsX × cellsY.
+  srcCanvas.width = cellsX;
+  srcCanvas.height = cellsY;
+  if (state.aspect === '1:1') {
+    const s = Math.min(sw, sh);
+    const dx = (sw - s) / 2;
+    const dy = (sh - s) / 2;
+    sctx.drawImage(frameSource, dx, dy, s, s, 0, 0, cellsX, cellsY);
+  } else {
+    sctx.drawImage(frameSource, 0, 0, cellsX, cellsY);
+  }
+  const data = sctx.getImageData(0, 0, cellsX, cellsY).data;
+
+  // Background.
+  if (state.bgOn) {
+    vctx.fillStyle = state.bgColor;
+    vctx.fillRect(0, 0, W, H);
+  } else {
+    vctx.clearRect(0, 0, W, H);
+  }
+
+  const scaleRange = state.scaleMax - state.scaleMin;
+  // Build list of enabled bucket indices (0..6). With all 7 on this is [0..6].
+  // With N enabled, luminance is mapped into N buckets so the gradient still
+  // covers the full shadow→highlight range using only the picked states.
+  const activeBuckets = [];
+  for (let k = 0; k < 7; k++) if (state.enabled[k]) activeBuckets.push(k);
+  const N = activeBuckets.length;
+  if (N === 0) return; // nothing to draw — background only
+
+  for (let y = 0; y < cellsY; y++) {
+    for (let x = 0; x < cellsX; x++) {
+      const i = (y * cellsX + x) * 4;
+      const a = data[i+3] / 255;
+      // Treat transparent source pixels as background luminance (0 → shadow).
+      let lum = (0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2]) / 255;
+      lum *= a;
+      if (state.invert) lum = 1 - lum;
+      let idx = Math.floor(lum * N);
+      if (idx >= N) idx = N - 1;
+      if (idx < 0) idx = 0;
+      const bucket = activeBuckets[idx];
+      const scale = state.scaleMin + scaleRange * lum;
+      let rot = state.rotation;
+      if (state.randomRot) {
+        // deterministic per-cell hash to 0/90/180/270
+        const h = ((x * 73856093) ^ (y * 19349663)) >>> 0;
+        rot = (h & 3) * 90;
+      }
+      const shape = shapeCache[bucket];
+      if (!shape) continue;
+      const drawSize = cellPx * scale;
+      if (drawSize <= 0.5) continue;
+      const cx = x * cellPx + cellPx / 2;
+      const cy = y * cellPx + cellPx / 2;
+      vctx.save();
+      vctx.translate(cx, cy);
+      if (rot) vctx.rotate(rot * Math.PI / 180);
+      vctx.drawImage(shape, -drawSize/2, -drawSize/2, drawSize, drawSize);
+      vctx.restore();
+    }
+  }
+}
+
+// ---------- animation loop ----------
+let lastFpsAt = performance.now();
+let frameCount = 0;
+function tick(now) {
+  if (state.source) {
+    if (state.source.type === 'gif' && state.source.playing) {
+      const cur = state.source.frames[state.source.frameIdx];
+      if (now - state.source.lastTick >= cur.duration) {
+        state.source.frameIdx = (state.source.frameIdx + 1) % state.source.frames.length;
+        state.source.lastTick = now;
+        renderOnce();
+        frameCount++;
+      }
+    } else if (state.source.type === 'video') {
+      if (!vid.paused && !vid.ended) {
+        renderOnce();
+        frameCount++;
+      }
+    }
+  }
+  if (now - lastFpsAt >= 1000) {
+    $('fpsLabel').textContent = `${frameCount} fps`;
+    frameCount = 0;
+    lastFpsAt = now;
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ---------- export ----------
+let recorder = null;
+let recordChunks = [];
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportImage() {
+  // For export-no-bg, render once with bg disabled.
+  const prev = state.bgOn;
+  if (state.exportNoBg) {
+    state.bgOn = false;
+    renderOnce();
+  }
+  view.toBlob((blob) => {
+    if (state.exportNoBg) {
+      state.bgOn = prev;
+      renderOnce();
+    }
+    if (blob) downloadBlob(blob, 'dither.png');
+  }, 'image/png');
+}
+
+function startVideoExport() {
+  if (!state.source || state.source.type === 'image') return;
+  const types = [
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm',
+  ];
+  let mimeType = '';
+  for (const t of types) {
+    if (MediaRecorder.isTypeSupported(t)) { mimeType = t; break; }
+  }
+  if (!mimeType) {
+    $('exportStatus').textContent = 'WebM not supported in this browser.';
+    return;
+  }
+  // If exporting without bg, flip bg for the duration of recording.
+  const prevBg = state.bgOn;
+  if (state.exportNoBg) state.bgOn = false;
+
+  const stream = view.captureStream(30);
+  recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 8_000_000 });
+  recordChunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size) recordChunks.push(e.data); };
+  recorder.onstop = () => {
+    if (state.exportNoBg) { state.bgOn = prevBg; requestRender(); }
+    const blob = new Blob(recordChunks, { type: mimeType });
+    downloadBlob(blob, 'dither.webm');
+    $('exportStatus').textContent = `Saved ${(blob.size / 1024 / 1024).toFixed(2)} MB`;
+    $('exportVideo').disabled = false;
+    $('stopRecord').disabled = true;
+  };
+  recorder.start();
+  $('exportStatus').textContent = 'Recording…';
+  $('exportVideo').disabled = true;
+  $('stopRecord').disabled = false;
+
+  // Auto-stop after one full loop for gifs, or 10s for video (user can stop earlier).
+  if (state.source.type === 'gif') {
+    const total = state.source.frames.reduce((a,f) => a + f.duration, 0);
+    setTimeout(stopVideoExport, total + 200);
+  } else if (state.source.type === 'video') {
+    const dur = isFinite(vid.duration) && vid.duration > 0 ? Math.min(vid.duration * 1000, 30000) : 10000;
+    setTimeout(stopVideoExport, dur + 200);
+  }
+}
+function stopVideoExport() {
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+}
+
+// ---------- wiring ----------
+$('srcFile').addEventListener('change', (e) => {
+  const f = e.target.files[0];
+  if (f) loadFile(f);
+});
+
+const bindRange = (id, valId, key, transform = (v) => v, suffix = '') => {
+  const el = $(id);
+  const v = $(valId);
+  const sync = () => {
+    state[key] = transform(+el.value);
+    if (v) v.textContent = `${el.value}${suffix}`;
+    requestRender();
+  };
+  el.addEventListener('input', sync);
+  sync();
+};
+
+bindRange('grid', 'gridVal', 'gridCells');
+bindRange('scaleMin', 'scaleMinVal', 'scaleMin', (v) => v/100, '%');
+bindRange('scaleMax', 'scaleMaxVal', 'scaleMax', (v) => v/100, '%');
+
+$('aspect').addEventListener('change', (e) => { state.aspect = e.target.value; requestRender(); });
+$('bgColor').addEventListener('input', (e) => { state.bgColor = e.target.value; requestRender(); });
+$('bgOn').addEventListener('change', (e) => { state.bgOn = e.target.checked; requestRender(); });
+$('invert').addEventListener('change', (e) => { state.invert = e.target.checked; requestRender(); });
+$('rotation').addEventListener('change', (e) => { state.rotation = +e.target.value; requestRender(); });
+$('randomRot').addEventListener('change', (e) => { state.randomRot = e.target.checked; requestRender(); });
+$('exportNoBg').addEventListener('change', (e) => { state.exportNoBg = e.target.checked; });
+
+$('playBtn').addEventListener('click', () => {
+  if (!state.source) return;
+  if (state.source.type === 'gif') { state.source.playing = true; state.source.lastTick = performance.now(); }
+  else if (state.source.type === 'video') { vid.play().catch(()=>{}); }
+});
+$('pauseBtn').addEventListener('click', () => {
+  if (!state.source) return;
+  if (state.source.type === 'gif') state.source.playing = false;
+  else if (state.source.type === 'video') vid.pause();
+});
+
+$('resetSlots').addEventListener('click', async () => {
+  state.svgs = [...DEFAULT_SVGS];
+  state.colors = [...DEFAULT_COLORS];
+  state.enabled = [true, true, true, true, true, true, true];
+  renderSlots();
+  await rebuildShapeCache();
+  requestRender();
+});
+
+$('exportImage').addEventListener('click', exportImage);
+$('exportVideo').addEventListener('click', startVideoExport);
+$('stopRecord').addEventListener('click', stopVideoExport);
+
+// ---------- zoom & pan ----------
+let zoom = 1, panX = 0, panY = 0;
+const stageInner = document.querySelector('.stage-inner');
+const ZOOM_MIN = 0.1, ZOOM_MAX = 16;
+
+function applyTransform() {
+  view.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+  $('zoomLabel').textContent = `${Math.round(zoom * 100)}%`;
+}
+
+function setZoom(next, anchorX = null, anchorY = null) {
+  next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, next));
+  if (anchorX !== null && anchorY !== null) {
+    const rect = view.getBoundingClientRect();
+    const cx = anchorX - (rect.left + rect.width / 2);
+    const cy = anchorY - (rect.top + rect.height / 2);
+    const k = next / zoom;
+    panX -= cx * (k - 1);
+    panY -= cy * (k - 1);
+  }
+  zoom = next;
+  applyTransform();
+}
+
+stageInner.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  setZoom(zoom * factor, e.clientX, e.clientY);
+}, { passive: false });
+
+let dragging = false, dragOrigin = null;
+stageInner.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  dragging = true;
+  dragOrigin = { x: e.clientX - panX, y: e.clientY - panY };
+  stageInner.classList.add('dragging');
+});
+window.addEventListener('mousemove', (e) => {
+  if (!dragging) return;
+  panX = e.clientX - dragOrigin.x;
+  panY = e.clientY - dragOrigin.y;
+  applyTransform();
+});
+window.addEventListener('mouseup', () => {
+  dragging = false;
+  stageInner.classList.remove('dragging');
+});
+
+$('zoomIn').addEventListener('click', () => setZoom(zoom * 1.25));
+$('zoomOut').addEventListener('click', () => setZoom(zoom / 1.25));
+$('zoomReset').addEventListener('click', () => { zoom = 1; panX = 0; panY = 0; applyTransform(); });
+
+// drag-drop on stage
+const stage = document.querySelector('.stage');
+['dragenter','dragover'].forEach((e) => stage.addEventListener(e, (ev) => { ev.preventDefault(); stage.style.outline = '2px dashed var(--accent)'; stage.style.outlineOffset = '-12px'; }));
+['dragleave','drop'].forEach((e) => stage.addEventListener(e, (ev) => { ev.preventDefault(); stage.style.outline = ''; }));
+stage.addEventListener('drop', (ev) => {
+  ev.preventDefault();
+  const f = ev.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+// drag-drop on the Choose file button itself
+const fileBtn = $('fileBtn');
+['dragenter','dragover'].forEach((e) => fileBtn.addEventListener(e, (ev) => {
+  ev.preventDefault(); ev.stopPropagation();
+  fileBtn.classList.add('dragover');
+}));
+['dragleave','drop'].forEach((e) => fileBtn.addEventListener(e, (ev) => {
+  ev.preventDefault(); ev.stopPropagation();
+  fileBtn.classList.remove('dragover');
+}));
+fileBtn.addEventListener('drop', (ev) => {
+  ev.preventDefault(); ev.stopPropagation();
+  const f = ev.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+// suppress default browser open-file when missing the drop zone
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
+// ---------- presets: persistence + apply ----------
+const PRESETS_KEY = 'dither-studio-presets-v1';
+
+function loadStoredPresets() {
+  try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || '{}'); }
+  catch { return {}; }
+}
+function saveStoredPresets(p) { localStorage.setItem(PRESETS_KEY, JSON.stringify(p)); }
+
+function captureSettings() {
+  return {
+    gridCells: state.gridCells,
+    aspect: state.aspect,
+    bgOn: state.bgOn,
+    bgColor: state.bgColor,
+    svgs: [...state.svgs],
+    colors: [...state.colors],
+    enabled: [...state.enabled],
+    invert: state.invert,
+    scaleMin: state.scaleMin,
+    scaleMax: state.scaleMax,
+    rotation: state.rotation,
+    randomRot: state.randomRot,
+  };
+}
+
+async function applyPreset(s) {
+  if (!s) return;
+  // Mutate state.
+  Object.assign(state, {
+    gridCells: s.gridCells ?? state.gridCells,
+    aspect: s.aspect ?? state.aspect,
+    bgOn: s.bgOn ?? state.bgOn,
+    bgColor: s.bgColor ?? state.bgColor,
+    svgs: s.svgs ? [...s.svgs] : state.svgs,
+    colors: s.colors ? [...s.colors] : state.colors,
+    enabled: s.enabled ? [...s.enabled] : state.enabled,
+    invert: s.invert ?? state.invert,
+    scaleMin: s.scaleMin ?? state.scaleMin,
+    scaleMax: s.scaleMax ?? state.scaleMax,
+    rotation: s.rotation ?? state.rotation,
+    randomRot: s.randomRot ?? state.randomRot,
+  });
+  // Sync UI controls.
+  $('grid').value = state.gridCells; $('gridVal').textContent = state.gridCells;
+  $('aspect').value = state.aspect;
+  $('bgOn').checked = state.bgOn;
+  $('bgColor').value = state.bgColor;
+  $('invert').checked = state.invert;
+  const sMin = Math.round(state.scaleMin * 100), sMax = Math.round(state.scaleMax * 100);
+  $('scaleMin').value = sMin; $('scaleMinVal').textContent = `${sMin}%`;
+  $('scaleMax').value = sMax; $('scaleMaxVal').textContent = `${sMax}%`;
+  $('rotation').value = String(state.rotation);
+  $('randomRot').checked = state.randomRot;
+  renderSlots();
+  try {
+    await rebuildShapeCache();
+  } catch (err) {
+    // Don't let one bad SVG block the rest of the preset (background, grid, etc.)
+    console.warn('Some preset shapes failed to load:', err);
+  }
+  requestRender();
+}
+
+function refreshSavedDropdown(selectName = '') {
+  const sel = $('savedPreset');
+  const stored = loadStoredPresets();
+  const names = Object.keys(stored).sort((a,b) => a.localeCompare(b));
+  sel.innerHTML = names.length
+    ? '<option value="">— pick one —</option>' + names.map((n) => `<option value="${n}">${n}</option>`).join('')
+    : '<option value="">— none saved —</option>';
+  if (selectName && names.includes(selectName)) sel.value = selectName;
+  $('deletePreset').disabled = !sel.value;
+}
+
+$('starterPreset').addEventListener('change', async (e) => {
+  const key = e.target.value;
+  e.target.value = ''; // reset first so re-selecting same preset still triggers
+  if (!key) return;
+  const preset = BUILTIN_PRESETS[key] || SERPIER_PRESETS[key];
+  if (preset) await applyPreset(preset.settings);
+});
+
+$('savedPreset').addEventListener('change', async (e) => {
+  const name = e.target.value;
+  $('deletePreset').disabled = !name;
+  if (!name) return;
+  const stored = loadStoredPresets();
+  if (stored[name]) await applyPreset(stored[name]);
+});
+
+$('savePreset').addEventListener('click', () => {
+  const name = prompt('Name this preset:');
+  if (!name) return;
+  const trimmed = name.trim();
+  if (!trimmed) return;
+  const stored = loadStoredPresets();
+  if (stored[trimmed] && !confirm(`Overwrite "${trimmed}"?`)) return;
+  stored[trimmed] = captureSettings();
+  saveStoredPresets(stored);
+  refreshSavedDropdown(trimmed);
+});
+
+$('deletePreset').addEventListener('click', () => {
+  const sel = $('savedPreset');
+  const name = sel.value;
+  if (!name) return;
+  if (!confirm(`Delete preset "${name}"?`)) return;
+  const stored = loadStoredPresets();
+  delete stored[name];
+  saveStoredPresets(stored);
+  refreshSavedDropdown();
+});
+
+refreshSavedDropdown();
+
+// Populate the built-in / Serpier preset dropdown from the JS maps so adding
+// a preset is a one-place change.
+function populateBuiltinDropdown() {
+  const sel = $('starterPreset');
+  sel.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '— pick one —';
+  sel.appendChild(placeholder);
+
+  const addGroup = (label, map) => {
+    const keys = Object.keys(map);
+    if (!keys.length) return;
+    const g = document.createElement('optgroup');
+    g.label = label;
+    for (const k of keys) {
+      const o = document.createElement('option');
+      o.value = k;
+      o.textContent = map[k].label || k;
+      g.appendChild(o);
+    }
+    sel.appendChild(g);
+  };
+  addGroup('Built-in', BUILTIN_PRESETS);
+  addGroup('Serpier', SERPIER_PRESETS);
+}
+populateBuiltinDropdown();
+
+// Export / import user presets as a JSON file — lets colleagues move presets
+// between devices or share them with each other without a backend.
+$('exportPresets').addEventListener('click', () => {
+  const stored = loadStoredPresets();
+  if (!Object.keys(stored).length) {
+    alert('You have no saved presets yet. Use "Save current as…" first.');
+    return;
+  }
+  const payload = { version: 1, exportedAt: new Date().toISOString(), presets: stored };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  downloadBlob(blob, 'dithering-studio-presets.json');
+});
+
+$('importPresets').addEventListener('click', () => $('importPresetsFile').click());
+
+$('importPresetsFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  let payload;
+  try { payload = JSON.parse(await f.text()); }
+  catch { alert('Could not read that file — is it a valid presets JSON?'); return; }
+  const incoming = payload?.presets && typeof payload.presets === 'object'
+    ? payload.presets
+    : (payload && typeof payload === 'object' ? payload : null);
+  if (!incoming) { alert('No presets found in that file.'); return; }
+  const stored = loadStoredPresets();
+  const existing = new Set(Object.keys(stored));
+  const collisions = Object.keys(incoming).filter((k) => existing.has(k));
+  let mode = 'merge';
+  if (collisions.length) {
+    const overwrite = confirm(
+      `${collisions.length} preset name${collisions.length === 1 ? '' : 's'} already exist (${collisions.slice(0, 3).join(', ')}${collisions.length > 3 ? '…' : ''}).\n\nOK = overwrite. Cancel = keep yours, rename incoming.`
+    );
+    mode = overwrite ? 'overwrite' : 'rename';
+  }
+  let count = 0;
+  for (const [name, settings] of Object.entries(incoming)) {
+    if (!settings || typeof settings !== 'object') continue;
+    let key = name;
+    if (mode === 'rename' && existing.has(key)) {
+      let i = 2;
+      while (existing.has(`${name} (${i})`)) i++;
+      key = `${name} (${i})`;
+    }
+    stored[key] = settings;
+    existing.add(key);
+    count++;
+  }
+  saveStoredPresets(stored);
+  refreshSavedDropdown();
+  alert(`Imported ${count} preset${count === 1 ? '' : 's'}.`);
+});
+
+// init
+renderSlots();
+rebuildShapeCache().then(() => {
+  // Seed canvas with a checker preview so the empty state is obvious.
+  view.width = 480; view.height = 480;
+  vctx.fillStyle = '#0a0a0a';
+  vctx.fillRect(0,0,view.width,view.height);
+  vctx.fillStyle = '#666';
+  vctx.font = '14px -apple-system, sans-serif';
+  vctx.textAlign = 'center';
+  vctx.fillText('Drop an image, GIF, or video — or click "Choose file"', 240, 240);
+});
