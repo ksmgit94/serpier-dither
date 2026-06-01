@@ -358,6 +358,7 @@ function disposeSource() {
   $('playBtn').disabled = true;
   $('pauseBtn').disabled = true;
   $('exportVideo').disabled = true;
+  $('exportLottie').disabled = true;
 }
 
 async function loadFile(file) {
@@ -387,6 +388,22 @@ async function loadImage(file) {
   const img = new Image();
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   state.source = { type: 'image', element: img, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url };
+  $('exportLottie').disabled = false;
+}
+
+// Parse Graphics Control Extension blocks from raw GIF bytes to extract the
+// canonical per-frame delays (in centiseconds). ImageDecoder in Chrome
+// historically clamps short delays to 100ms, so we override its timing with
+// what the source actually says.
+function parseGifFrameDelays(bytes) {
+  const delays = [];
+  for (let i = 0; i < bytes.length - 8; i++) {
+    if (bytes[i] === 0x21 && bytes[i+1] === 0xF9 && bytes[i+2] === 0x04) {
+      const delay = bytes[i+4] | (bytes[i+5] << 8); // centiseconds (1/100 s)
+      delays.push(delay * 10); // → ms
+    }
+  }
+  return delays;
 }
 
 async function loadGif(file) {
@@ -396,6 +413,7 @@ async function loadGif(file) {
     return;
   }
   const buf = await file.arrayBuffer();
+  const rawDelays = parseGifFrameDelays(new Uint8Array(buf));
   let dec, track, count;
   try {
     dec = new ImageDecoder({ data: buf, type: 'image/gif' });
@@ -421,7 +439,11 @@ async function loadGif(file) {
       c.width = image.displayWidth;
       c.height = image.displayHeight;
       c.getContext('2d').drawImage(image, 0, 0);
-      const ms = duration ? duration / 1000 : 100; // µs → ms
+      // Prefer the canonical delay from the GIF bytes; fall back to the
+      // decoder's reported duration (µs → ms) if parsing missed this frame.
+      const rawMs = rawDelays[i];
+      const decoderMs = duration ? duration / 1000 : null;
+      const ms = rawMs && rawMs >= 10 ? rawMs : (decoderMs ?? 100);
       frames.push({ canvas: c, duration: Math.max(20, ms) });
       image.close();
     } catch (e) {
@@ -445,6 +467,7 @@ async function loadGif(file) {
   $('playBtn').disabled = false;
   $('pauseBtn').disabled = false;
   $('exportVideo').disabled = false;
+  $('exportLottie').disabled = false;
 }
 
 async function loadVideo(file) {
@@ -484,6 +507,7 @@ async function loadVideo(file) {
   $('playBtn').disabled = false;
   $('pauseBtn').disabled = false;
   $('exportVideo').disabled = false;
+  $('exportLottie').disabled = false;
   // Render the first frame immediately so the user sees the video even if
   // autoplay is blocked. If play succeeds, the tick loop drives subsequent frames.
   requestRender();
@@ -674,6 +698,93 @@ function exportImage() {
   }, 'image/png');
 }
 
+async function exportLottie() {
+  if (!state.source) return;
+  if (state.source.type === 'video') {
+    $('exportStatus').textContent = 'Video → Lottie not yet supported. Try WebM, or convert your video to a GIF first.';
+    return;
+  }
+  $('exportLottie').disabled = true;
+  $('exportStatus').textContent = 'Rendering frames…';
+
+  // Pause animation while we capture so frameIdx doesn't drift.
+  const wasPlaying = state.source.type === 'gif' && state.source.playing;
+  if (state.source.type === 'gif') state.source.playing = false;
+  const savedFrameIdx = state.source.type === 'gif' ? state.source.frameIdx : 0;
+
+  // For export-no-bg, flip bg off during render so frames carry alpha through PNG.
+  const prevBg = state.bgOn;
+  if (state.exportNoBg) state.bgOn = false;
+
+  const frames = [];
+  try {
+    if (state.source.type === 'gif') {
+      const n = state.source.frames.length;
+      for (let i = 0; i < n; i++) {
+        state.source.frameIdx = i;
+        renderOnce();
+        await new Promise((r) => requestAnimationFrame(r));
+        const png = view.toDataURL('image/png');
+        frames.push({ png, durationMs: state.source.frames[i].duration });
+        if (i % 8 === 0) {
+          $('exportStatus').textContent = `Rendering frame ${i + 1}/${n}…`;
+          await new Promise((r) => setTimeout(r, 0)); // yield to UI
+        }
+      }
+    } else {
+      // Single still image.
+      renderOnce();
+      await new Promise((r) => requestAnimationFrame(r));
+      frames.push({ png: view.toDataURL('image/png'), durationMs: 1000 });
+    }
+  } finally {
+    if (state.exportNoBg) state.bgOn = prevBg;
+    if (state.source.type === 'gif') {
+      state.source.frameIdx = savedFrameIdx;
+      state.source.playing = wasPlaying;
+      state.source.lastTick = performance.now();
+    }
+    requestRender();
+  }
+
+  $('exportStatus').textContent = 'Building Lottie…';
+  await new Promise((r) => setTimeout(r, 0));
+
+  // Bitmap-sequence Lottie: each rendered frame is an embedded PNG asset, and
+  // one image layer per frame is stacked in time. Plays correctly in any
+  // Lottie player while preserving exact dither output.
+  const fr = 30;
+  const w = view.width;
+  const h = view.height;
+  const assets = frames.map((f, i) => ({ id: `f${i}`, w, h, u: '', p: f.png, e: 1 }));
+  const layers = [];
+  let cursor = 0;
+  for (let i = 0; i < frames.length; i++) {
+    const durF = Math.max(1, Math.round(frames[i].durationMs / 1000 * fr));
+    layers.push({
+      ddd: 0, ind: i + 1, ty: 2, nm: `Frame ${i}`, refId: `f${i}`, sr: 1,
+      ks: {
+        o: { a: 0, k: 100 },
+        r: { a: 0, k: 0 },
+        p: { a: 0, k: [w / 2, h / 2, 0] },
+        a: { a: 0, k: [w / 2, h / 2, 0] },
+        s: { a: 0, k: [100, 100, 100] },
+      },
+      ao: 0, ip: cursor, op: cursor + durF, st: cursor, bm: 0,
+    });
+    cursor += durF;
+  }
+  const lottie = {
+    v: '5.7.0', fr, ip: 0, op: cursor, w, h, nm: 'Dither Studio export',
+    ddd: 0, assets, layers,
+  };
+
+  const blob = new Blob([JSON.stringify(lottie)], { type: 'application/json' });
+  downloadBlob(blob, 'dither.json');
+  $('exportStatus').textContent = `Saved Lottie · ${(blob.size / 1024 / 1024).toFixed(2)} MB · ${frames.length} frames`;
+  $('exportLottie').disabled = false;
+}
+
 function startVideoExport() {
   if (!state.source || state.source.type === 'image') return;
   const types = [
@@ -776,6 +887,7 @@ $('resetSlots').addEventListener('click', async () => {
 $('exportImage').addEventListener('click', exportImage);
 $('exportVideo').addEventListener('click', startVideoExport);
 $('stopRecord').addEventListener('click', stopVideoExport);
+$('exportLottie').addEventListener('click', exportLottie);
 
 // ---------- zoom & pan ----------
 let zoom = 1, panX = 0, panY = 0;
