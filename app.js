@@ -97,19 +97,76 @@ const SERPIER_CELL_RAMP = [
   svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
 ];
 
+// Serpier brand colours, taken directly from the official logo SVG.
+const SERPIER_BG = '#003d20';
+const SERPIER_FG = '#e6ff9a';
+
+// The actual logo geometry (two C-shapes + the centre square), authored in a
+// 1920×1080 canvas. Wrapped in a transform that centres it inside a 100×100
+// dither-cell viewBox at a given scale factor.
+const serpierStamp = (scale) => svg(
+  `<g transform="translate(50 50) scale(${scale}) translate(-905 -487)">` +
+    `<path fill="currentColor" d="M810,487.01v100h100v100h-104.67c-82.84,0-150-67.16-150-150,0-41.42,16.79-78.92,43.93-106.07,27.15-27.14,64.65-43.93,106.07-43.93h104.67v100h-100Z"/>` +
+    `<path fill="currentColor" d="M1255.33,537.01c0,41.42-16.79,78.92-43.93,106.07-27.15,27.14-64.65,43.93-106.07,43.93h-95.33v-100h100v-100h-100v-100h95.33c82.84,0,150,67.16,150,150Z"/>` +
+    `<rect fill="currentColor" x="910" y="487.01" width="100" height="100"/>` +
+  `</g>`
+);
+const SERPIER_STAMP_RAMP = [0.015, 0.030, 0.050, 0.075, 0.100, 0.115, 0.130].map(serpierStamp);
+
+// Pill (stadium) shapes — clean silhouettes without the checker cutouts.
+// Same aspect ratio as the actual logo (~1.75:1).
+const capsule = (w, h) => svg(
+  `<rect x="${(100 - w) / 2}" y="${(100 - h) / 2}" width="${w}" height="${h}" rx="${h / 2}" fill="currentColor"/>`
+);
+const SERPIER_CAPSULE_RAMP = [
+  capsule(20, 11),
+  capsule(32, 18),
+  capsule(46, 26),
+  capsule(58, 33),
+  capsule(70, 40),
+  capsule(82, 47),
+  capsule(94, 54),
+];
+
 const SERPIER_PRESETS = {
   serpierCells: {
     label: 'Serpier Cells',
     settings: {
       gridCells: 50, aspect: 'original',
-      bgOn: true, bgColor: '#014023', // deep forest green from the logo
+      bgOn: true, bgColor: SERPIER_BG,
       svgs: [...SERPIER_CELL_RAMP],
-      colors: ['#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E'], // lime
+      colors: Array(7).fill(SERPIER_FG),
       enabled: [true,true,true,true,true,true,true],
       // Lock scale at 100% — the shape geometry already conveys luminance,
       // and full-cell shapes make the sub-grid sub-cells line up between
       // neighbouring dither cells (creates emergent continuous pattern).
       invert: false, scaleMin: 1.0, scaleMax: 1.0,
+      rotation: 0, randomRot: false,
+    },
+  },
+  serpierStamp: {
+    label: 'Serpier Stamp',
+    settings: {
+      // Chunky grid so the mini logo's cutouts and centre square actually
+      // resolve at each cell. Push grid higher for finer texture.
+      gridCells: 30, aspect: 'original',
+      bgOn: true, bgColor: SERPIER_BG,
+      svgs: [...SERPIER_STAMP_RAMP],
+      colors: Array(7).fill(SERPIER_FG),
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.5, scaleMax: 1.0,
+      rotation: 0, randomRot: false,
+    },
+  },
+  serpierCapsule: {
+    label: 'Serpier Capsule',
+    settings: {
+      gridCells: 60, aspect: 'original',
+      bgOn: true, bgColor: SERPIER_BG,
+      svgs: [...SERPIER_CAPSULE_RAMP],
+      colors: Array(7).fill(SERPIER_FG),
+      enabled: [true,true,true,true,true,true,true],
+      invert: false, scaleMin: 0.5, scaleMax: 1.0,
       rotation: 0, randomRot: false,
     },
   },
