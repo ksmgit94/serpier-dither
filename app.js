@@ -76,20 +76,43 @@ const LINE_RAMP = [
 ];
 
 // ---------- Serpier-branded presets ----------
-// Drop new Serpier looks in here. Same shape as BUILTIN_PRESETS below.
-// They appear under a "Serpier" group in the preset dropdown.
+// Each ramp is a fractal dither: every dither cell IS a 3×3 sub-grid filled
+// progressively from sparse to dense, with state 3 = the Serpier signature
+// "X" (4 corners + centre — the dark mass in the middle of the logo, where
+// the + sits in negative space).
+const SERPIER_CELL_RAMP = [
+  // 0 — just the centre cell (1/9)
+  svg('<rect x="35" y="35" width="30" height="30" fill="currentColor"/>'),
+  // 1 — opposite diagonal corners (2/9)
+  svg('<rect x="0" y="0" width="30" height="30" fill="currentColor"/><rect x="70" y="70" width="30" height="30" fill="currentColor"/>'),
+  // 2 — four corners (4/9)
+  svg('<rect x="0" y="0" width="30" height="30" fill="currentColor"/><rect x="70" y="0" width="30" height="30" fill="currentColor"/><rect x="0" y="70" width="30" height="30" fill="currentColor"/><rect x="70" y="70" width="30" height="30" fill="currentColor"/>'),
+  // 3 — Serpier signature: 4 corners + centre (5/9)
+  svg('<rect x="0" y="0" width="30" height="30" fill="currentColor"/><rect x="70" y="0" width="30" height="30" fill="currentColor"/><rect x="35" y="35" width="30" height="30" fill="currentColor"/><rect x="0" y="70" width="30" height="30" fill="currentColor"/><rect x="70" y="70" width="30" height="30" fill="currentColor"/>'),
+  // 4 — X + top & bottom middle (7/9)
+  svg('<rect x="0" y="0" width="30" height="30" fill="currentColor"/><rect x="35" y="0" width="30" height="30" fill="currentColor"/><rect x="70" y="0" width="30" height="30" fill="currentColor"/><rect x="35" y="35" width="30" height="30" fill="currentColor"/><rect x="0" y="70" width="30" height="30" fill="currentColor"/><rect x="35" y="70" width="30" height="30" fill="currentColor"/><rect x="70" y="70" width="30" height="30" fill="currentColor"/>'),
+  // 5 — full 3×3 grid with gaps (9/9)
+  svg('<rect x="0" y="0" width="30" height="30" fill="currentColor"/><rect x="35" y="0" width="30" height="30" fill="currentColor"/><rect x="70" y="0" width="30" height="30" fill="currentColor"/><rect x="0" y="35" width="30" height="30" fill="currentColor"/><rect x="35" y="35" width="30" height="30" fill="currentColor"/><rect x="70" y="35" width="30" height="30" fill="currentColor"/><rect x="0" y="70" width="30" height="30" fill="currentColor"/><rect x="35" y="70" width="30" height="30" fill="currentColor"/><rect x="70" y="70" width="30" height="30" fill="currentColor"/>'),
+  // 6 — solid (no sub-grid gaps)
+  svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
+];
+
 const SERPIER_PRESETS = {
-  // example:
-  // serpierMono: {
-  //   label: 'Serpier Mono',
-  //   settings: { gridCells: 90, aspect: 'original', bgOn: true, bgColor: '#000',
-  //     svgs: [...DEFAULT_SVGS],
-  //     colors: Array(7).fill('#ff6b1a'),
-  //     enabled: [true,true,true,true,true,true,true],
-  //     invert: false, scaleMin: 0.3, scaleMax: 1.0,
-  //     rotation: 0, randomRot: false,
-  //   },
-  // },
+  serpierCells: {
+    label: 'Serpier Cells',
+    settings: {
+      gridCells: 50, aspect: 'original',
+      bgOn: true, bgColor: '#014023', // deep forest green from the logo
+      svgs: [...SERPIER_CELL_RAMP],
+      colors: ['#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E','#C8FF8E'], // lime
+      enabled: [true,true,true,true,true,true,true],
+      // Lock scale at 100% — the shape geometry already conveys luminance,
+      // and full-cell shapes make the sub-grid sub-cells line up between
+      // neighbouring dither cells (creates emergent continuous pattern).
+      invert: false, scaleMin: 1.0, scaleMax: 1.0,
+      rotation: 0, randomRot: false,
+    },
+  },
 };
 
 // ---------- generic built-in presets ----------
