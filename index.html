@@ -31,6 +31,26 @@
     <section class="group">
       <h2>Export</h2>
       <div class="row">
+        <label>Size</label>
+        <select id="exportSize">
+          <option value="match">Match canvas</option>
+          <option value="800">800 px</option>
+          <option value="640">640 px</option>
+          <option value="480">480 px</option>
+          <option value="320">320 px</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>FPS</label>
+        <select id="exportFps">
+          <option value="match">Match source</option>
+          <option value="24">24</option>
+          <option value="15">15</option>
+          <option value="12">12</option>
+          <option value="8">8</option>
+        </select>
+      </div>
+      <div class="row">
         <label class="check" style="flex:1;">
           <input type="checkbox" id="exportNoBg" />
           Transparent background (alpha)
@@ -157,6 +177,6 @@
 <canvas id="src" hidden></canvas>
 <video id="vid" hidden playsinline muted loop></video>
 
-<script src="app.js?v=12" type="module"></script>
+<script src="app.js?v=13" type="module"></script>
 </body>
 </html>

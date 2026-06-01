@@ -689,7 +689,8 @@ function exportImage() {
     state.bgOn = false;
     renderOnce();
   }
-  view.toBlob((blob) => {
+  const out = captureFrameCanvas();
+  out.toBlob((blob) => {
     if (state.exportNoBg) {
       state.bgOn = prev;
       renderOnce();
@@ -763,14 +764,89 @@ function buildZip(files) {
 }
 
 // Render the current canvas to raw PNG bytes (Uint8Array). Used by .lottie export.
-function canvasToPngBytes() {
+function canvasToPngBytes(srcCanvas = view) {
   return new Promise((resolve, reject) => {
-    view.toBlob(async (blob) => {
+    srcCanvas.toBlob(async (blob) => {
       if (!blob) return reject(new Error('toBlob failed'));
       const buf = await blob.arrayBuffer();
       resolve(new Uint8Array(buf));
     }, 'image/png');
   });
+}
+
+// ---------- export-size + fps helpers ----------
+function getExportSize() {
+  const v = $('exportSize').value;
+  if (v === 'match' || !v) return { w: view.width, h: view.height };
+  const max = parseInt(v, 10);
+  const ratio = view.height / view.width;
+  if (view.width >= view.height) return { w: max, h: Math.max(1, Math.round(max * ratio)) };
+  return { w: Math.max(1, Math.round(max / ratio)), h: max };
+}
+
+// Returns the source FPS (frames per second) the export should target.
+function getExportFps() {
+  const v = $('exportFps').value;
+  if (v === 'match' || !v) {
+    if (state.source?.type === 'gif' && state.source.frames.length) {
+      const avgMs = state.source.frames.reduce((a, f) => a + f.duration, 0) / state.source.frames.length;
+      return Math.max(1, Math.round(1000 / avgMs));
+    }
+    return 30;
+  }
+  return parseInt(v, 10);
+}
+
+// Build the list of frames to export, optionally subsampling to a target fps.
+function getExportFrameList() {
+  if (!state.source) return [];
+  if (state.source.type !== 'gif') {
+    return [{ srcIdx: 0, durationMs: 1000 }];
+  }
+  const v = $('exportFps').value;
+  if (v === 'match' || !v) {
+    return state.source.frames.map((f, i) => ({ srcIdx: i, durationMs: f.duration }));
+  }
+  const targetFps = parseInt(v, 10);
+  const targetMs = 1000 / targetFps;
+  const totalMs = state.source.frames.reduce((a, f) => a + f.duration, 0);
+  const count = Math.max(1, Math.round(totalMs / targetMs));
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    const tMs = i * targetMs;
+    let acc = 0, srcIdx = state.source.frames.length - 1;
+    for (let j = 0; j < state.source.frames.length; j++) {
+      const next = acc + state.source.frames[j].duration;
+      if (tMs < next) { srcIdx = j; break; }
+      acc = next;
+    }
+    out.push({ srcIdx, durationMs: targetMs });
+  }
+  return out;
+}
+
+// Downsize `view` to a target dimension into a fresh canvas (or return `view`
+// directly when no resize is needed).
+function captureFrameCanvas() {
+  const { w, h } = getExportSize();
+  if (w === view.width && h === view.height) return view;
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  const ctx = tmp.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(view, 0, 0, w, h);
+  return tmp;
+}
+
+// Uint8Array → "data:image/png;base64,…" (chunked to avoid call-stack limits).
+function pngBytesToDataUrl(bytes) {
+  let bin = '';
+  const CHUNK = 32768;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return `data:image/png;base64,${btoa(bin)}`;
 }
 
 async function exportLottie() {
@@ -794,17 +870,18 @@ async function exportLottie() {
 
   const frames = []; // each: { durationMs, png (data URL for .json) OR pngBytes (Uint8Array for .lottie) }
   try {
-    const list = state.source.type === 'gif' ? state.source.frames : [{ duration: 1000 }];
+    const list = getExportFrameList();
     const n = list.length;
     for (let i = 0; i < n; i++) {
-      if (state.source.type === 'gif') state.source.frameIdx = i;
+      if (state.source.type === 'gif') state.source.frameIdx = list[i].srcIdx;
       renderOnce();
       await new Promise((r) => requestAnimationFrame(r));
+      const out = captureFrameCanvas();
+      const bytes = await canvasToPngBytes(out);
       if (fmt === 'lottie') {
-        const bytes = await canvasToPngBytes();
-        frames.push({ pngBytes: bytes, durationMs: list[i].duration });
+        frames.push({ pngBytes: bytes, durationMs: list[i].durationMs });
       } else {
-        frames.push({ png: view.toDataURL('image/png'), durationMs: list[i].duration });
+        frames.push({ png: pngBytesToDataUrl(bytes), durationMs: list[i].durationMs });
       }
       if (i % 8 === 0) {
         $('exportStatus').textContent = `Rendering frame ${i + 1}/${n}…`;
@@ -824,9 +901,8 @@ async function exportLottie() {
   $('exportStatus').textContent = `Building ${fmt === 'lottie' ? '.lottie' : '.json'}…`;
   await new Promise((r) => setTimeout(r, 0));
 
-  const fr = 30;
-  const w = view.width;
-  const h = view.height;
+  const fr = getExportFps();
+  const { w, h } = getExportSize();
 
   // Build the Lottie animation JSON. For .json we embed PNGs as base64 in `p`;
   // for .lottie we reference external files in the archive's images/ folder.
