@@ -582,10 +582,11 @@ function drawFrame(frameSource) {
   for (let y = 0; y < cellsY; y++) {
     for (let x = 0; x < cellsX; x++) {
       const i = (y * cellsX + x) * 4;
-      const a = data[i+3] / 255;
-      // Treat transparent source pixels as background luminance (0 → shadow).
+      // Skip transparent cells so the background shows through (paper effect
+      // for logo-on-alpha sources). 50% alpha is the threshold for "this cell
+      // is mostly the logo, not mostly the background".
+      if (data[i+3] < 128) continue;
       let lum = (0.2126 * data[i] + 0.7152 * data[i+1] + 0.0722 * data[i+2]) / 255;
-      lum *= a;
       if (state.invert) lum = 1 - lum;
       let idx = Math.floor(lum * N);
       if (idx >= N) idx = N - 1;
@@ -1057,13 +1058,31 @@ $('importPresetsFile').addEventListener('change', async (e) => {
 
 // init
 renderSlots();
-rebuildShapeCache().then(() => {
-  // Seed canvas with a checker preview so the empty state is obvious.
+rebuildShapeCache().then(async () => {
+  // Show the empty-state hint while we try to fetch the default demo asset.
   view.width = 480; view.height = 480;
   vctx.fillStyle = '#0a0a0a';
   vctx.fillRect(0,0,view.width,view.height);
   vctx.fillStyle = '#666';
   vctx.font = '14px -apple-system, sans-serif';
   vctx.textAlign = 'center';
-  vctx.fillText('Drop an image, GIF, or video — or click "Choose file"', 240, 240);
+  vctx.fillText('Loading demo…', 240, 240);
+
+  // Boot the tool with the Serpier logo + Riso Lines preset so visitors see
+  // what the dither does without having to upload anything. If the asset is
+  // missing or fails to load, fall back silently to the empty state.
+  try {
+    const res = await fetch('default.gif', { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const file = new File([blob], 'default.gif', { type: 'image/gif' });
+    await loadFile(file);
+    await applyPreset(BUILTIN_PRESETS.riso.settings);
+  } catch (e) {
+    console.warn('Default demo asset not loaded:', e);
+    vctx.fillStyle = '#0a0a0a';
+    vctx.fillRect(0,0,view.width,view.height);
+    vctx.fillStyle = '#666';
+    vctx.fillText('Drop an image, GIF, or video — or click "Choose file"', 240, 240);
+  }
 });
