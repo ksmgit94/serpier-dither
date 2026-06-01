@@ -44,7 +44,11 @@
         <button id="stopRecord" class="ghost" disabled>Stop</button>
       </div>
       <div class="row">
-        <button id="exportLottie" class="primary" disabled>Save as Lottie (.json)</button>
+        <button id="exportLottie" class="primary" disabled>Save as Lottie</button>
+        <select id="lottieFormat" title="Lottie file format">
+          <option value="lottie">.lottie</option>
+          <option value="json">.json</option>
+        </select>
       </div>
       <div id="exportStatus" class="muted small"></div>
     </section>
@@ -153,6 +157,6 @@
 <canvas id="src" hidden></canvas>
 <video id="vid" hidden playsinline muted loop></video>
 
-<script src="app.js?v=11" type="module"></script>
+<script src="app.js?v=12" type="module"></script>
 </body>
 </html>

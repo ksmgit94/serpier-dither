@@ -698,12 +698,88 @@ function exportImage() {
   }, 'image/png');
 }
 
+// ---------- minimal ZIP writer (STORE, no compression) ----------
+// Used to build .lottie archives in-browser without bundling a zip library.
+let CRC32_TABLE = null;
+function crc32(bytes) {
+  if (!CRC32_TABLE) {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c;
+    }
+    CRC32_TABLE = t;
+  }
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function buildZip(files) {
+  // files: Array<{ name: string, data: Uint8Array }>
+  const enc = new TextEncoder();
+  const parts = [];
+  const centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const sz = f.data.length;
+    const crc = crc32(f.data);
+    const lfh = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(lfh.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true); lv.setUint16(6, 0, true); lv.setUint16(8, 0, true);
+    lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true); // dummy time/date
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, sz, true); lv.setUint32(22, sz, true);
+    lv.setUint16(26, nameBytes.length, true); lv.setUint16(28, 0, true);
+    lfh.set(nameBytes, 30);
+    parts.push(lfh, f.data);
+
+    const cdh = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(cdh.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0, true); cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, sz, true); cv.setUint32(24, sz, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true); cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true); cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true); cv.setUint32(42, offset, true);
+    cdh.set(nameBytes, 46);
+    centrals.push(cdh);
+    offset += lfh.length + f.data.length;
+  }
+  const centralStart = offset;
+  const centralSize = centrals.reduce((a, c) => a + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true); ev.setUint32(16, centralStart, true);
+  return new Blob([...parts, ...centrals, eocd], { type: 'application/zip' });
+}
+
+// Render the current canvas to raw PNG bytes (Uint8Array). Used by .lottie export.
+function canvasToPngBytes() {
+  return new Promise((resolve, reject) => {
+    view.toBlob(async (blob) => {
+      if (!blob) return reject(new Error('toBlob failed'));
+      const buf = await blob.arrayBuffer();
+      resolve(new Uint8Array(buf));
+    }, 'image/png');
+  });
+}
+
 async function exportLottie() {
   if (!state.source) return;
   if (state.source.type === 'video') {
     $('exportStatus').textContent = 'Video → Lottie not yet supported. Try WebM, or convert your video to a GIF first.';
     return;
   }
+  const fmt = $('lottieFormat').value === 'lottie' ? 'lottie' : 'json';
   $('exportLottie').disabled = true;
   $('exportStatus').textContent = 'Rendering frames…';
 
@@ -716,26 +792,24 @@ async function exportLottie() {
   const prevBg = state.bgOn;
   if (state.exportNoBg) state.bgOn = false;
 
-  const frames = [];
+  const frames = []; // each: { durationMs, png (data URL for .json) OR pngBytes (Uint8Array for .lottie) }
   try {
-    if (state.source.type === 'gif') {
-      const n = state.source.frames.length;
-      for (let i = 0; i < n; i++) {
-        state.source.frameIdx = i;
-        renderOnce();
-        await new Promise((r) => requestAnimationFrame(r));
-        const png = view.toDataURL('image/png');
-        frames.push({ png, durationMs: state.source.frames[i].duration });
-        if (i % 8 === 0) {
-          $('exportStatus').textContent = `Rendering frame ${i + 1}/${n}…`;
-          await new Promise((r) => setTimeout(r, 0)); // yield to UI
-        }
-      }
-    } else {
-      // Single still image.
+    const list = state.source.type === 'gif' ? state.source.frames : [{ duration: 1000 }];
+    const n = list.length;
+    for (let i = 0; i < n; i++) {
+      if (state.source.type === 'gif') state.source.frameIdx = i;
       renderOnce();
       await new Promise((r) => requestAnimationFrame(r));
-      frames.push({ png: view.toDataURL('image/png'), durationMs: 1000 });
+      if (fmt === 'lottie') {
+        const bytes = await canvasToPngBytes();
+        frames.push({ pngBytes: bytes, durationMs: list[i].duration });
+      } else {
+        frames.push({ png: view.toDataURL('image/png'), durationMs: list[i].duration });
+      }
+      if (i % 8 === 0) {
+        $('exportStatus').textContent = `Rendering frame ${i + 1}/${n}…`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
     }
   } finally {
     if (state.exportNoBg) state.bgOn = prevBg;
@@ -747,22 +821,25 @@ async function exportLottie() {
     requestRender();
   }
 
-  $('exportStatus').textContent = 'Building Lottie…';
+  $('exportStatus').textContent = `Building ${fmt === 'lottie' ? '.lottie' : '.json'}…`;
   await new Promise((r) => setTimeout(r, 0));
 
-  // Bitmap-sequence Lottie: each rendered frame is an embedded PNG asset, and
-  // one image layer per frame is stacked in time. Plays correctly in any
-  // Lottie player while preserving exact dither output.
   const fr = 30;
   const w = view.width;
   const h = view.height;
-  const assets = frames.map((f, i) => ({ id: `f${i}`, w, h, u: '', p: f.png, e: 1 }));
+
+  // Build the Lottie animation JSON. For .json we embed PNGs as base64 in `p`;
+  // for .lottie we reference external files in the archive's images/ folder.
+  const assets = frames.map((f, i) => fmt === 'lottie'
+    ? { id: `img_${i}`, w, h, u: '', p: `img_${i}.png`, e: 0 }
+    : { id: `img_${i}`, w, h, u: '', p: f.png, e: 1 }
+  );
   const layers = [];
   let cursor = 0;
   for (let i = 0; i < frames.length; i++) {
     const durF = Math.max(1, Math.round(frames[i].durationMs / 1000 * fr));
     layers.push({
-      ddd: 0, ind: i + 1, ty: 2, nm: `Frame ${i}`, refId: `f${i}`, sr: 1,
+      ddd: 0, ind: i + 1, ty: 2, nm: `Frame ${i}`, refId: `img_${i}`, sr: 1,
       ks: {
         o: { a: 0, k: 100 },
         r: { a: 0, k: 0 },
@@ -774,14 +851,38 @@ async function exportLottie() {
     });
     cursor += durF;
   }
-  const lottie = {
+  const lottieJson = {
     v: '5.7.0', fr, ip: 0, op: cursor, w, h, nm: 'Dither Studio export',
     ddd: 0, assets, layers,
   };
 
-  const blob = new Blob([JSON.stringify(lottie)], { type: 'application/json' });
-  downloadBlob(blob, 'dither.json');
-  $('exportStatus').textContent = `Saved Lottie · ${(blob.size / 1024 / 1024).toFixed(2)} MB · ${frames.length} frames`;
+  let blob, filename;
+  if (fmt === 'lottie') {
+    // dotLottie v1: ZIP archive containing manifest.json + animations/<id>.json + images/*.png
+    const enc = new TextEncoder();
+    const id = 'dither';
+    const manifest = {
+      version: '1.0.0',
+      revision: 1,
+      generator: 'Dithering Studio',
+      animations: [{ id, speed: 1, loop: true, autoplay: true }],
+    };
+    const zipFiles = [
+      { name: 'manifest.json', data: enc.encode(JSON.stringify(manifest)) },
+      { name: `animations/${id}.json`, data: enc.encode(JSON.stringify(lottieJson)) },
+    ];
+    for (let i = 0; i < frames.length; i++) {
+      zipFiles.push({ name: `images/img_${i}.png`, data: frames[i].pngBytes });
+    }
+    blob = buildZip(zipFiles);
+    filename = 'dither.lottie';
+  } else {
+    blob = new Blob([JSON.stringify(lottieJson)], { type: 'application/json' });
+    filename = 'dither.json';
+  }
+
+  downloadBlob(blob, filename);
+  $('exportStatus').textContent = `Saved ${filename} · ${(blob.size / 1024 / 1024).toFixed(2)} MB · ${frames.length} frames`;
   $('exportLottie').disabled = false;
 }
 
