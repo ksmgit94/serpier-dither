@@ -7,7 +7,15 @@
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-<div class="app">
+<div class="topbar">
+  <div class="brandmark">Serpier Studio</div>
+  <div class="modes">
+    <button id="modeDither" class="mode active">Dithering</button>
+    <button id="modeShader" class="mode">Shaders</button>
+  </div>
+</div>
+
+<div class="app" id="ditherApp">
   <aside class="panel left">
     <header class="brand">
       <h1>Dithering Studio</h1>
@@ -177,9 +185,67 @@
   </aside>
 </div>
 
+<div class="app" id="shaderApp" hidden>
+  <aside class="panel left">
+    <header class="brand">
+      <h1>Shader Studio</h1>
+      <p class="muted">Pick a style, tune it, copy the code into your site.</p>
+    </header>
+
+    <section class="group">
+      <h2>Preset</h2>
+      <div class="row">
+        <label>Style</label>
+        <select id="shaderPreset"></select>
+      </div>
+      <div class="row">
+        <button id="shaderRandom" class="ghost">Randomize</button>
+        <button id="shaderReset" class="ghost">Reset preset</button>
+      </div>
+    </section>
+
+    <section class="group">
+      <h2>Export code</h2>
+      <div class="row">
+        <label>Format</label>
+        <select id="shaderFormat">
+          <option value="react">React component (.tsx)</option>
+          <option value="html">HTML + JS (vanilla)</option>
+          <option value="glsl">GLSL fragment only</option>
+        </select>
+      </div>
+      <div id="shaderDeps" class="deps small"></div>
+      <textarea id="shaderCode" class="code" readonly spellcheck="false" wrap="off"></textarea>
+      <div class="row">
+        <button id="shaderCopy" class="primary">Copy code</button>
+        <button id="shaderDownload" class="ghost">Download file</button>
+      </div>
+      <div id="shaderExportStatus" class="muted small"></div>
+    </section>
+  </aside>
+
+  <main class="stage">
+    <div class="stage-inner shader-stage">
+      <canvas id="shaderView"></canvas>
+    </div>
+    <footer class="stagebar muted small">
+      <span id="shaderInfo">—</span>
+      <span id="shaderFps">— fps</span>
+    </footer>
+  </main>
+
+  <aside class="panel right">
+    <section class="group first">
+      <h2>Controls</h2>
+      <div id="shaderControls"></div>
+    </section>
+  </aside>
+</div>
+
 <canvas id="src" hidden></canvas>
 <video id="vid" hidden playsinline muted loop></video>
 
 <script src="app.js?v=16" type="module"></script>
+<script src="shader.js?v=1" type="module"></script>
 </body>
 </html>
