@@ -1,5 +1,7 @@
 // Dithering Studio — single-file vanilla app.
 
+import { GIFEncoder, quantize, applyPalette } from './gifenc.js';
+
 // Guard against duplicate execution — if some host (HMR, eval re-injection,
 // embedding) re-imports this module, we don't want to double-bind listeners.
 if (window.__ditherStudioLoaded) {
@@ -439,6 +441,7 @@ function disposeSource() {
   $('pauseBtn').disabled = true;
   $('exportVideo').disabled = true;
   $('exportLottie').disabled = true;
+  $('exportGif').disabled = true;
 }
 
 async function loadFile(file) {
@@ -469,6 +472,7 @@ async function loadImage(file) {
   await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
   state.source = { type: 'image', element: img, width: img.naturalWidth, height: img.naturalHeight, objectUrl: url };
   $('exportLottie').disabled = false;
+  $('exportGif').disabled = false;
 }
 
 // Parse Graphics Control Extension blocks from raw GIF bytes to extract the
@@ -548,6 +552,7 @@ async function loadGif(file) {
   $('pauseBtn').disabled = false;
   $('exportVideo').disabled = false;
   $('exportLottie').disabled = false;
+  $('exportGif').disabled = false;
 }
 
 async function loadVideo(file) {
@@ -1042,6 +1047,130 @@ async function exportLottie() {
   $('exportLottie').disabled = false;
 }
 
+// ---------- animated GIF export ----------
+// Encode one already-rendered canvas as a single GIF frame. Uses a per-frame
+// palette (local colour table) for best fidelity with the dither's colours.
+function writeGifFrame(gif, srcCanvas, durationMs, transparent) {
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const ctx = srcCanvas.getContext('2d');
+  const data = ctx.getImageData(0, 0, w, h).data;
+  const opts = { delay: durationMs, repeat: 0 };
+  let palette, index;
+  if (transparent) {
+    // 1-bit alpha: cells below the alpha threshold become a single transparent
+    // colour so the page background shows through and loops stay clean.
+    palette = quantize(data, 256, { format: 'rgba4444', oneBitAlpha: true });
+    index = applyPalette(data, palette, 'rgba4444');
+    let ti = palette.findIndex((p) => p.length >= 4 && p[3] === 0);
+    if (ti < 0) { ti = palette.length; palette.push([0, 0, 0, 0]); }
+    opts.transparent = true;
+    opts.transparentIndex = ti;
+    opts.dispose = 2; // restore to background between frames
+  } else {
+    palette = quantize(data, 256, { format: 'rgb565' });
+    index = applyPalette(data, palette, 'rgb565');
+  }
+  opts.palette = palette;
+  gif.writeFrame(index, w, h, opts);
+}
+
+// GIF + image sources: walk the existing export frame list (one full loop).
+async function encodeGifFromList(gif, transparent) {
+  const isGif = state.source.type === 'gif';
+  const wasPlaying = isGif && state.source.playing;
+  if (isGif) state.source.playing = false;
+  const savedIdx = isGif ? state.source.frameIdx : 0;
+  try {
+    const list = getExportFrameList();
+    const n = list.length;
+    for (let i = 0; i < n; i++) {
+      if (isGif) state.source.frameIdx = list[i].srcIdx;
+      renderOnce();
+      await new Promise((r) => requestAnimationFrame(r));
+      writeGifFrame(gif, captureFrameCanvas(), list[i].durationMs, transparent);
+      if (i % 5 === 0) {
+        $('exportStatus').textContent = `Encoding GIF frame ${i + 1}/${n}…`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+  } finally {
+    if (isGif) {
+      state.source.frameIdx = savedIdx;
+      state.source.playing = wasPlaying;
+      state.source.lastTick = performance.now();
+    }
+  }
+}
+
+// Video sources: seek across the whole clip at the chosen fps so the GIF spans
+// the source's full length — no manual record/stop, loops match the source.
+async function encodeGifFromVideo(gif, transparent) {
+  const dur = isFinite(vid.duration) && vid.duration > 0 ? vid.duration : 0;
+  if (!dur) throw new Error('video duration unknown');
+  const wasPlaying = !vid.paused;
+  vid.pause();
+  const savedTime = vid.currentTime;
+
+  const fps = getExportFps();
+  const MAX_FRAMES = 600; // safety cap so huge clips don't blow up memory
+  let count = Math.max(1, Math.round(dur * fps));
+  let perFrameMs = 1000 / fps;
+  if (count > MAX_FRAMES) { count = MAX_FRAMES; perFrameMs = (dur * 1000) / count; }
+
+  const seek = (t) => new Promise((res) => {
+    const on = () => { vid.removeEventListener('seeked', on); res(); };
+    vid.addEventListener('seeked', on);
+    vid.currentTime = t;
+  });
+
+  try {
+    for (let i = 0; i < count; i++) {
+      await seek(Math.min(dur - 1e-4, (i / count) * dur));
+      renderOnce();
+      await new Promise((r) => requestAnimationFrame(r));
+      writeGifFrame(gif, captureFrameCanvas(), perFrameMs, transparent);
+      if (i % 3 === 0) {
+        $('exportStatus').textContent = `Encoding GIF frame ${i + 1}/${count}…`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+  } finally {
+    vid.currentTime = savedTime;
+    if (wasPlaying) vid.play().catch(() => {});
+  }
+}
+
+async function exportGif() {
+  if (!state.source) return;
+  $('exportGif').disabled = true;
+  $('exportStatus').textContent = 'Rendering frames…';
+  await new Promise((r) => setTimeout(r, 0));
+
+  const transparent = state.exportNoBg;
+  const prevBg = state.bgOn;
+  if (transparent) state.bgOn = false;
+
+  try {
+    const gif = GIFEncoder();
+    if (state.source.type === 'video') {
+      await encodeGifFromVideo(gif, transparent);
+    } else {
+      await encodeGifFromList(gif, transparent);
+    }
+    gif.finish();
+    const blob = new Blob([gif.bytes()], { type: 'image/gif' });
+    downloadBlob(blob, 'dither.gif');
+    $('exportStatus').textContent = `Saved dither.gif · ${(blob.size / 1024 / 1024).toFixed(2)} MB`;
+  } catch (e) {
+    console.error('GIF export failed:', e);
+    $('exportStatus').textContent = `GIF export failed: ${e.message || e}`;
+  } finally {
+    if (transparent) state.bgOn = prevBg;
+    requestRender();
+    $('exportGif').disabled = false;
+  }
+}
+
 function startVideoExport() {
   if (!state.source || state.source.type === 'image') return;
   const types = [
@@ -1142,6 +1271,7 @@ $('resetSlots').addEventListener('click', async () => {
 });
 
 $('exportImage').addEventListener('click', exportImage);
+$('exportGif').addEventListener('click', exportGif);
 $('exportVideo').addEventListener('click', startVideoExport);
 $('stopRecord').addEventListener('click', stopVideoExport);
 $('exportLottie').addEventListener('click', exportLottie);
