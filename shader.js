@@ -79,6 +79,54 @@ void main(){
   },
 
   {
+    id: 'herobottom',
+    name: 'Hero Bottom (Plasma)',
+    component: 'HeroPlasmaBottom',
+    speed: 0.5,
+    controls: [
+      { key: 'u_bg', label: 'Shape color', group: 'Colors', type: 'color', value: '#2b34ff' },
+      { key: 'u_dot', label: 'Dot color', group: 'Colors', type: 'color', value: '#ffffff' },
+      { key: 'u_height', label: 'Height', group: 'Shape', min: 0.1, max: 0.95, step: 0.01, value: 0.5 },
+      { key: 'u_curve', label: 'Edge lift', group: 'Shape', min: 0, max: 0.6, step: 0.01, value: 0.18 },
+      { key: 'u_wave', label: 'Wave', group: 'Shape', min: 0, max: 0.2, step: 0.005, value: 0.05 },
+      { key: 'u_softness', label: 'Edge fade', group: 'Shape', min: 0.02, max: 0.6, step: 0.01, value: 0.32 },
+      { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
+      { key: 'u_threshold', label: 'Threshold', group: 'Dither', min: 0, max: 1, step: 0.01, value: 0.5 },
+      { key: 'u_intensity', label: 'Plasma intensity', group: 'Plasma', min: 1, max: 8, step: 0.05, value: 3.5 },
+      { key: 'u_contrast', label: 'Plasma contrast', group: 'Plasma', min: 0.5, max: 3, step: 0.01, value: 1.3 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.5 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_pixelSize, u_threshold, u_intensity, u_contrast;
+uniform float u_height, u_curve, u_wave, u_softness;
+uniform vec3 u_bg, u_dot;
+` + GLSL_BAYER + `
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
+  vec2 uv = (cell * u_pixelSize) / u_resolution;   // y is 0 at bottom, 1 at top
+  float t = u_time;
+  vec2 p = uv * u_intensity;
+  float v = sin(p.x * 3.0 + t)
+          + sin(p.y * 3.0 + t * 1.3)
+          + sin((p.x + p.y) * 2.0 + t * 0.7);
+  vec2 q = p * 1.5 + vec2(sin(t * 0.4), cos(t * 0.5));
+  v += sin(length(q) * 3.0 - t * 1.2);
+  v *= 0.25;
+  float lum = clamp((v * 0.5 + 0.5 - 0.5) * u_contrast + 0.5, 0.0, 1.0);
+  float on = step(Bayer8(cell), lum - (u_threshold - 0.5));
+  vec3 col = mix(u_bg, u_dot, on);
+
+  // Wavy shape rising from the bottom: higher at the sides, dipping in the centre.
+  float valley = cos(uv.x * 6.2831) * 0.5 + 0.5;      // 1 at edges, 0 at centre
+  float wave = sin(uv.x * 6.2831 * 1.5 + t * 0.6);
+  float boundary = u_height + valley * u_curve + wave * u_wave;
+  float fill = clamp((boundary - uv.y) / max(u_softness, 0.001), 0.0, 1.0);
+  float a = 1.0 - step(fill, Bayer8(cell + 17.0));    // dotty edge; fill=0 -> fully clear
+  gl_FragColor = vec4(col, a);
+}`,
+  },
+
+  {
     id: 'aurora',
     name: 'Flowing Aurora',
     component: 'AuroraBackground',
@@ -275,7 +323,8 @@ function buildProgram(preset) {
 function ensureGL() {
   if (gl) return true;
   canvas = $('shaderView');
-  gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+  const glAttrs = { alpha: true, premultipliedAlpha: false, antialias: true };
+  gl = canvas.getContext('webgl', glAttrs) || canvas.getContext('experimental-webgl', glAttrs);
   if (!gl) {
     $('shaderInfo').textContent = 'WebGL not supported in this browser.';
     return false;
@@ -421,7 +470,8 @@ function uniformsLiteral(preset) {
 
 function coreLines(frag, uniformsLit, speed) {
   return [
-    "  const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');",
+    "  const glAttrs = { alpha: true, premultipliedAlpha: false, antialias: true };",
+    "  const gl = canvas.getContext('webgl', glAttrs) || canvas.getContext('experimental-webgl', glAttrs);",
     "  if (!gl) return;",
     "  const VERT = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.0,1.0);}';",
     "  const FRAG = `" + frag.trim() + "`;",
