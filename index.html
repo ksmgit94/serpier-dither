@@ -230,7 +230,15 @@
     </section>
 
     <section class="group">
-      <h2>Video</h2>
+      <h2>Export animation</h2>
+      <div class="row">
+        <label>Format</label>
+        <select id="shaderAnimFormat">
+          <option value="png">PNG sequence (.zip) — Premiere, alpha</option>
+          <option value="gif">Animated GIF (.gif) — transparent</option>
+          <option value="webm">WebM (.webm) — web</option>
+        </select>
+      </div>
       <div class="row">
         <label>Length</label>
         <select id="shaderVidLen">
@@ -241,7 +249,16 @@
         </select>
       </div>
       <div class="row">
-        <button id="shaderRecord" class="primary">Record video (WebM)</button>
+        <label>FPS</label>
+        <select id="shaderFps">
+          <option value="30" selected>30</option>
+          <option value="24">24</option>
+          <option value="15">15</option>
+          <option value="12">12</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="shaderExportAnim" class="primary">Export animation</button>
         <button id="shaderStopRec" class="ghost" disabled>Stop</button>
       </div>
       <div id="shaderRecStatus" class="muted small"></div>
@@ -270,6 +287,6 @@
 <video id="vid" hidden playsinline muted loop></video>
 
 <script src="app.js?v=16" type="module"></script>
-<script src="shader.js?v=4" type="module"></script>
+<script src="shader.js?v=5" type="module"></script>
 </body>
 </html>

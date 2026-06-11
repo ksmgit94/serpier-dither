@@ -2,6 +2,8 @@
 // Sibling module to the Dithering Studio (app.js). Shares the page via a mode
 // toggle; all shader logic is isolated here so the dither tool is untouched.
 
+import { GIFEncoder, quantize, applyPalette } from './gifenc.js';
+
 const $ = (id) => document.getElementById(id);
 
 // ---------- colour helpers ----------
@@ -133,9 +135,9 @@ void main(){
     component: 'FireBackground',
     speed: 1.0,
     controls: [
-      { key: 'u_c1', label: 'Flame core', group: 'Colors', type: 'color', value: '#b3261a' },
+      { key: 'u_c1', label: 'Flame core (base)', group: 'Colors', type: 'color', value: '#ffd24d' },
       { key: 'u_c2', label: 'Mid', group: 'Colors', type: 'color', value: '#ff6a00' },
-      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#ffe08a' },
+      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#b3261a' },
       { key: 'u_height', label: 'Flame height', group: 'Fire', min: 0.2, max: 1, step: 0.01, value: 0.85 },
       { key: 'u_falloff', label: 'Falloff', group: 'Fire', min: 0.5, max: 5, step: 0.05, value: 2.0 },
       { key: 'u_intensity', label: 'Intensity', group: 'Fire', min: 0.5, max: 4, step: 0.05, value: 1.8 },
@@ -165,10 +167,12 @@ void main(){
   // Ordered-dithered posterization — the plasma "pixel dither" look.
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
-  // Fire colour ramp.
-  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.55, q));
-  col = mix(col, u_c3, smoothstep(0.5, 1.0, q));
-  float a = step(0.5 / (lv - 1.0), q);   // lowest band -> clear; dotty flame tips
+  float qStep = 1.0 / (lv - 1.0);
+  float a = step(qStep * 0.5, q);   // lowest band -> clear; dotty flame tips
+  // s: 0 at coolest visible band (tips) .. 1 at hottest base (core).
+  float s = clamp((q - qStep) / max(1.0 - qStep, 0.001), 0.0, 1.0);
+  vec3 col = mix(u_c3, u_c2, smoothstep(0.0, 0.5, s));   // tip -> mid
+  col = mix(col, u_c1, smoothstep(0.5, 1.0, s));          // mid -> core (base)
   gl_FragColor = vec4(col, a);
 }`,
   },
@@ -179,9 +183,9 @@ void main(){
     component: 'FlamesBackground',
     speed: 1.0,
     controls: [
-      { key: 'u_c1', label: 'Flame core', group: 'Colors', type: 'color', value: '#b3261a' },
+      { key: 'u_c1', label: 'Flame core (base)', group: 'Colors', type: 'color', value: '#ffd24d' },
       { key: 'u_c2', label: 'Mid', group: 'Colors', type: 'color', value: '#ff6a00' },
-      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#ffe08a' },
+      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#b3261a' },
       { key: 'u_count', label: 'Flame count', group: 'Flames', min: 3, max: 16, step: 1, value: 7 },
       { key: 'u_separation', label: 'Separation', group: 'Flames', min: 1, max: 6, step: 0.1, value: 2.6 },
       { key: 'u_height', label: 'Flame height', group: 'Flames', min: 0.2, max: 1, step: 0.01, value: 0.8 },
@@ -216,8 +220,12 @@ void main(){
   heat *= sep;
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
-  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.55, q));
-  col = mix(col, u_c3, smoothstep(0.5, 1.0, q));
+  float qStep = 1.0 / (lv - 1.0);
+  // s: 0 at the coolest visible band (flame tips) .. 1 at the hottest base (core).
+  // Mapping over the visible range makes picked colours land exactly on the bands.
+  float s = clamp((q - qStep) / max(1.0 - qStep, 0.001), 0.0, 1.0);
+  vec3 col = mix(u_c3, u_c2, smoothstep(0.0, 0.5, s));   // tip -> mid
+  col = mix(col, u_c1, smoothstep(0.5, 1.0, s));          // mid -> core (base)
   float a = step(0.5 / (lv - 1.0), q);
   gl_FragColor = vec4(col, a);
 }`,
@@ -422,7 +430,8 @@ function buildProgram(preset) {
 function ensureGL() {
   if (gl) return true;
   canvas = $('shaderView');
-  const glAttrs = { alpha: true, premultipliedAlpha: false, antialias: true };
+  // preserveDrawingBuffer lets us read frames back reliably for PNG/GIF export.
+  const glAttrs = { alpha: true, premultipliedAlpha: false, antialias: true, preserveDrawingBuffer: true };
   gl = canvas.getContext('webgl', glAttrs) || canvas.getContext('experimental-webgl', glAttrs);
   if (!gl) {
     $('shaderInfo').textContent = 'WebGL not supported in this browser.';
@@ -448,12 +457,11 @@ function currentSpeed() {
   return typeof v === 'number' ? v : 1;
 }
 
-function renderLoop(now) {
-  if (!active) return;
-  resizeCanvas();
+// Set all uniforms for the current preset at a given time (seconds), then draw.
+function drawAt(timeSec) {
   const preset = presetById(state.presetId);
   gl.uniform2f(locs.u_resolution, canvas.width, canvas.height);
-  gl.uniform1f(locs.u_time, (now - startTime) / 1000 * currentSpeed());
+  gl.uniform1f(locs.u_time, timeSec * currentSpeed());
   for (const c of preset.controls) {
     if (c.key === '__speed') continue;
     const loc = locs[c.key];
@@ -467,6 +475,12 @@ function renderLoop(now) {
   }
   if (locs.u_transparent) gl.uniform1f(locs.u_transparent, state.transparentBg ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+function renderLoop(now) {
+  if (!active) return;
+  resizeCanvas();
+  drawAt((now - startTime) / 1000);
 
   fpsCount++;
   if (now - fpsAt >= 1000) { $('shaderFps').textContent = `${fpsCount} fps`; fpsCount = 0; fpsAt = now; $('shaderInfo').textContent = `${canvas.width}×${canvas.height}`; }
@@ -745,7 +759,7 @@ function initShaderUI() {
     state.transparentBg = e.target.checked;
     regenerateExport();
   });
-  $('shaderRecord').addEventListener('click', startShaderRecord);
+  $('shaderExportAnim').addEventListener('click', exportAnimation);
   $('shaderStopRec').addEventListener('click', stopShaderRecord);
 
   $('shaderCopy').addEventListener('click', async () => {
@@ -773,6 +787,145 @@ function initShaderUI() {
   });
 }
 
+// ---------- download + minimal STORE zip (for PNG sequences) ----------
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let CRC32_TABLE = null;
+function crc32(bytes) {
+  if (!CRC32_TABLE) {
+    const t = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) { let c = i; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1); t[i] = c; }
+    CRC32_TABLE = t;
+  }
+  let c = 0xffffffff;
+  for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function buildZip(files) {
+  const enc = new TextEncoder();
+  const parts = [], centrals = [];
+  let offset = 0;
+  for (const f of files) {
+    const nameBytes = enc.encode(f.name);
+    const sz = f.data.length, crc = crc32(f.data);
+    const lfh = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(lfh.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true); lv.setUint16(10, 0, true); lv.setUint16(12, 0x21, true);
+    lv.setUint32(14, crc, true); lv.setUint32(18, sz, true); lv.setUint32(22, sz, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lfh.set(nameBytes, 30);
+    parts.push(lfh, f.data);
+    const cdh = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(cdh.buffer);
+    cv.setUint32(0, 0x02014b50, true); cv.setUint16(4, 20, true); cv.setUint16(6, 20, true);
+    cv.setUint16(12, 0, true); cv.setUint16(14, 0x21, true);
+    cv.setUint32(16, crc, true); cv.setUint32(20, sz, true); cv.setUint32(24, sz, true);
+    cv.setUint16(28, nameBytes.length, true); cv.setUint32(42, offset, true);
+    cdh.set(nameBytes, 46);
+    centrals.push(cdh);
+    offset += lfh.length + f.data.length;
+  }
+  const centralStart = offset;
+  const centralSize = centrals.reduce((a, c) => a + c.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, files.length, true); ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true); ev.setUint32(16, centralStart, true);
+  return new Blob([...parts, ...centrals, eocd], { type: 'application/zip' });
+}
+
+// ---------- offline frame export helpers ----------
+function exportFrameCount() {
+  const fps = parseInt($('shaderFps').value, 10) || 30;
+  const secs = parseFloat($('shaderVidLen').value) || 5;
+  const total = Math.min(450, Math.max(1, Math.round(fps * secs)));
+  return { fps, secs, total };
+}
+
+// PNG image sequence (zip) — full 8-bit alpha. Import into Premiere as an image sequence.
+async function exportPngSequence() {
+  stopLoop();
+  resizeCanvas();
+  const { fps, total } = exportFrameCount();
+  const files = [];
+  $('shaderExportAnim').disabled = true;
+  try {
+    for (let i = 0; i < total; i++) {
+      drawAt(i / fps);
+      const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      files.push({ name: `${state.presetId}_${String(i + 1).padStart(4, '0')}.png`, data: buf });
+      if (i % 4 === 0) { $('shaderRecStatus').textContent = `Rendering PNG ${i + 1}/${total}…`; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    downloadBlob(buildZip(files), `${state.presetId}-frames.zip`);
+    $('shaderRecStatus').textContent = `Saved ${total} transparent PNG frames · in Premiere: File ▸ Import, select frame 0001, tick "Image Sequence", set ${fps} fps`;
+  } catch (e) {
+    console.error(e); $('shaderRecStatus').textContent = 'PNG export failed: ' + e.message;
+  } finally {
+    $('shaderExportAnim').disabled = false;
+    startLoop();
+  }
+}
+
+// Animated transparent GIF (single file).
+async function exportGifAnim() {
+  stopLoop();
+  resizeCanvas();
+  const { fps, total } = exportFrameCount();
+  const w = canvas.width, h = canvas.height;
+  const enc = GIFEncoder();
+  const delay = Math.round(1000 / fps);
+  const pixels = new Uint8Array(w * h * 4);
+  const flipped = new Uint8Array(w * h * 4);
+  const rowBytes = w * 4;
+  $('shaderExportAnim').disabled = true;
+  try {
+    for (let i = 0; i < total; i++) {
+      drawAt(i / fps);
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      for (let y = 0; y < h; y++) flipped.set(pixels.subarray((h - 1 - y) * rowBytes, (h - y) * rowBytes), y * rowBytes);
+      const opts = { delay, repeat: 0 };
+      let palette, index;
+      if (state.transparentBg || /float a =/.test(presetById(state.presetId).frag)) {
+        palette = quantize(flipped, 256, { format: 'rgba4444', oneBitAlpha: true });
+        index = applyPalette(flipped, palette, 'rgba4444');
+        let ti = palette.findIndex((p) => p.length >= 4 && p[3] === 0);
+        if (ti < 0) { ti = palette.length; palette.push([0, 0, 0, 0]); }
+        opts.transparent = true; opts.transparentIndex = ti; opts.dispose = 2;
+      } else {
+        palette = quantize(flipped, 256, { format: 'rgb565' });
+        index = applyPalette(flipped, palette, 'rgb565');
+      }
+      opts.palette = palette;
+      enc.writeFrame(index, w, h, opts);
+      if (i % 4 === 0) { $('shaderRecStatus').textContent = `Encoding GIF ${i + 1}/${total}…`; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    enc.finish();
+    downloadBlob(new Blob([enc.bytes()], { type: 'image/gif' }), `${state.presetId}.gif`);
+    $('shaderRecStatus').textContent = `Saved ${state.presetId}.gif · ${total} frames`;
+  } catch (e) {
+    console.error(e); $('shaderRecStatus').textContent = 'GIF export failed: ' + e.message;
+  } finally {
+    $('shaderExportAnim').disabled = false;
+    startLoop();
+  }
+}
+
+function exportAnimation() {
+  const fmt = $('shaderAnimFormat').value;
+  if (fmt === 'webm') return startShaderRecord();
+  if (fmt === 'gif') return exportGifAnim();
+  return exportPngSequence();
+}
+
 // ---------- video recording (WebM, alpha-capable) ----------
 let mediaRec = null, recChunks = [], recTimeout = 0;
 
@@ -793,17 +946,13 @@ function startShaderRecord() {
   mediaRec.onstop = () => {
     const blob = new Blob(recChunks, { type: mime });
     const name = `${state.presetId}-shader${state.transparentBg ? '-alpha' : ''}.webm`;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadBlob(blob, name);
     $('shaderRecStatus').textContent = `Saved ${name} · ${(blob.size / 1024 / 1024).toFixed(2)} MB`;
-    $('shaderRecord').disabled = false;
+    $('shaderExportAnim').disabled = false;
     $('shaderStopRec').disabled = true;
   };
   mediaRec.start();
-  $('shaderRecord').disabled = true;
+  $('shaderExportAnim').disabled = true;
   $('shaderStopRec').disabled = false;
   const secs = parseFloat($('shaderVidLen').value) || 5;
   const note = state.transparentBg ? ' · transparent (view in Chrome)' : '';
