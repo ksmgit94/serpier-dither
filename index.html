@@ -207,6 +207,12 @@
     <section class="group">
       <h2>Export code</h2>
       <div class="row">
+        <label class="check" style="flex:1;">
+          <input type="checkbox" id="shaderTransparent" />
+          Transparent background
+        </label>
+      </div>
+      <div class="row">
         <label>Format</label>
         <select id="shaderFormat">
           <option value="react">React component (.tsx)</option>
@@ -221,6 +227,24 @@
         <button id="shaderDownload" class="ghost">Download file</button>
       </div>
       <div id="shaderExportStatus" class="muted small"></div>
+    </section>
+
+    <section class="group">
+      <h2>Video</h2>
+      <div class="row">
+        <label>Length</label>
+        <select id="shaderVidLen">
+          <option value="3">3 s</option>
+          <option value="5" selected>5 s</option>
+          <option value="8">8 s</option>
+          <option value="12">12 s</option>
+        </select>
+      </div>
+      <div class="row">
+        <button id="shaderRecord" class="primary">Record video (WebM)</button>
+        <button id="shaderStopRec" class="ghost" disabled>Stop</button>
+      </div>
+      <div id="shaderRecStatus" class="muted small"></div>
     </section>
   </aside>
 
@@ -246,6 +270,6 @@
 <video id="vid" hidden playsinline muted loop></video>
 
 <script src="app.js?v=16" type="module"></script>
-<script src="shader.js?v=3" type="module"></script>
+<script src="shader.js?v=4" type="module"></script>
 </body>
 </html>

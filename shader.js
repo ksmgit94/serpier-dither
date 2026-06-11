@@ -57,7 +57,7 @@ const PRESETS = [
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
     ],
     frag: GLSL_HEAD + `
-uniform float u_pixelSize, u_threshold, u_intensity, u_contrast;
+uniform float u_pixelSize, u_threshold, u_intensity, u_contrast, u_transparent;
 uniform vec3 u_bg, u_dot;
 ` + GLSL_BAYER + `
 void main(){
@@ -74,7 +74,8 @@ void main(){
   float lum = clamp((v * 0.5 + 0.5 - 0.5) * u_contrast + 0.5, 0.0, 1.0);
   float dither = Bayer8(cell);
   float on = step(dither, lum - (u_threshold - 0.5));
-  gl_FragColor = vec4(mix(u_bg, u_dot, on), 1.0);
+  float a = mix(1.0, on, u_transparent);   // transparent mode -> only dots are opaque
+  gl_FragColor = vec4(mix(u_bg, u_dot, on), a);
 }`,
   },
 
@@ -168,6 +169,56 @@ void main(){
   vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.55, q));
   col = mix(col, u_c3, smoothstep(0.5, 1.0, q));
   float a = step(0.5 / (lv - 1.0), q);   // lowest band -> clear; dotty flame tips
+  gl_FragColor = vec4(col, a);
+}`,
+  },
+
+  {
+    id: 'flames',
+    name: 'Dithered Flames (separate)',
+    component: 'FlamesBackground',
+    speed: 1.0,
+    controls: [
+      { key: 'u_c1', label: 'Flame core', group: 'Colors', type: 'color', value: '#b3261a' },
+      { key: 'u_c2', label: 'Mid', group: 'Colors', type: 'color', value: '#ff6a00' },
+      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#ffe08a' },
+      { key: 'u_count', label: 'Flame count', group: 'Flames', min: 3, max: 16, step: 1, value: 7 },
+      { key: 'u_separation', label: 'Separation', group: 'Flames', min: 1, max: 6, step: 0.1, value: 2.6 },
+      { key: 'u_height', label: 'Flame height', group: 'Flames', min: 0.2, max: 1, step: 0.01, value: 0.8 },
+      { key: 'u_falloff', label: 'Falloff', group: 'Flames', min: 0.5, max: 5, step: 0.05, value: 1.6 },
+      { key: 'u_intensity', label: 'Intensity', group: 'Flames', min: 0.5, max: 4, step: 0.05, value: 2.0 },
+      { key: 'u_scale', label: 'Detail', group: 'Flames', min: 1, max: 8, step: 0.1, value: 3.0 },
+      { key: 'u_riseSpeed', label: 'Rise speed', group: 'Flames', min: 0, max: 3, step: 0.05, value: 1.4 },
+      { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
+      { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 3, max: 8, step: 1, value: 5 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 1.0 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed, u_count, u_separation;
+uniform vec3 u_c1, u_c2, u_c3;
+` + GLSL_NOISE + GLSL_BAYER + `
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
+  vec2 uv = (cell * u_pixelSize) / u_resolution;
+  float t = u_time;
+  vec2 sp = vec2(uv.x * u_scale, uv.y * u_scale - t * u_riseSpeed);
+  float n1 = fbm(sp);
+  float n2 = fbm(sp * 2.0 + vec2(n1 * 1.5, -t * u_riseSpeed));
+  float n = mix(n1, n2, 0.6);
+  float grad = clamp((u_height - uv.y) / max(u_height, 0.001), 0.0, 1.0);
+  grad = pow(grad, u_falloff);
+  float heat = clamp(n * u_intensity * grad, 0.0, 1.0);
+  // Carve the heat into separate tongues that merge at the base and split as they rise.
+  float wob = fbm(vec2(uv.x * 3.0, -t * u_riseSpeed)) * 1.2;
+  float comb = 0.5 + 0.5 * sin((uv.x * u_count + wob) * 6.2831);
+  comb = pow(comb, u_separation);
+  float sep = mix(1.0, comb, smoothstep(0.0, u_height * 0.6, uv.y));
+  heat *= sep;
+  float lv = max(2.0, u_levels);
+  float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
+  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.55, q));
+  col = mix(col, u_c3, smoothstep(0.5, 1.0, q));
+  float a = step(0.5 / (lv - 1.0), q);
   gl_FragColor = vec4(col, a);
 }`,
   },
@@ -316,6 +367,7 @@ void main(){
 const state = {
   presetId: PRESETS[0].id,
   values: {}, // key -> number | hex string
+  transparentBg: false,
 };
 function presetById(id) { return PRESETS.find((p) => p.id === id) || PRESETS[0]; }
 function loadPresetDefaults(preset) {
@@ -364,6 +416,7 @@ function buildProgram(preset) {
     if (c.key === '__speed') continue;
     locs[c.key] = gl.getUniformLocation(program, c.key);
   }
+  locs.u_transparent = gl.getUniformLocation(program, 'u_transparent'); // null if preset has none
 }
 
 function ensureGL() {
@@ -412,6 +465,7 @@ function renderLoop(now) {
       gl.uniform1f(loc, state.values[c.key]);
     }
   }
+  if (locs.u_transparent) gl.uniform1f(locs.u_transparent, state.transparentBg ? 1 : 0);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
 
   fpsCount++;
@@ -510,6 +564,9 @@ function uniformsLiteral(preset) {
     } else {
       parts.push(`    ${c.key}: ${r4(state.values[c.key])}`);
     }
+  }
+  if (preset.frag.includes('u_transparent')) {
+    parts.push(`    u_transparent: ${state.transparentBg ? 1 : 0}`);
   }
   return '{\n' + parts.join(',\n') + '\n  }';
 }
@@ -684,6 +741,12 @@ function initShaderUI() {
   $('shaderFormat').addEventListener('change', regenerateExport);
   $('shaderReset').addEventListener('click', () => applyPreset(state.presetId, true));
   $('shaderRandom').addEventListener('click', randomize);
+  $('shaderTransparent').addEventListener('change', (e) => {
+    state.transparentBg = e.target.checked;
+    regenerateExport();
+  });
+  $('shaderRecord').addEventListener('click', startShaderRecord);
+  $('shaderStopRec').addEventListener('click', stopShaderRecord);
 
   $('shaderCopy').addEventListener('click', async () => {
     try {
@@ -708,6 +771,49 @@ function initShaderUI() {
     $('shaderExportStatus').textContent = `Downloaded ${file}`;
     setTimeout(() => { $('shaderExportStatus').textContent = ''; }, 2500);
   });
+}
+
+// ---------- video recording (WebM, alpha-capable) ----------
+let mediaRec = null, recChunks = [], recTimeout = 0;
+
+function startShaderRecord() {
+  if (!gl || !canvas.captureStream || !window.MediaRecorder) {
+    $('shaderRecStatus').textContent = 'Video recording not supported in this browser.';
+    return;
+  }
+  const types = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'];
+  let mime = '';
+  for (const t of types) { if (MediaRecorder.isTypeSupported(t)) { mime = t; break; } }
+  if (!mime) { $('shaderRecStatus').textContent = 'WebM not supported in this browser.'; return; }
+
+  const stream = canvas.captureStream(60);
+  mediaRec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12000000 });
+  recChunks = [];
+  mediaRec.ondataavailable = (e) => { if (e.data.size) recChunks.push(e.data); };
+  mediaRec.onstop = () => {
+    const blob = new Blob(recChunks, { type: mime });
+    const name = `${state.presetId}-shader${state.transparentBg ? '-alpha' : ''}.webm`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $('shaderRecStatus').textContent = `Saved ${name} · ${(blob.size / 1024 / 1024).toFixed(2)} MB`;
+    $('shaderRecord').disabled = false;
+    $('shaderStopRec').disabled = true;
+  };
+  mediaRec.start();
+  $('shaderRecord').disabled = true;
+  $('shaderStopRec').disabled = false;
+  const secs = parseFloat($('shaderVidLen').value) || 5;
+  const note = state.transparentBg ? ' · transparent (view in Chrome)' : '';
+  $('shaderRecStatus').textContent = `Recording ${secs}s${note}…`;
+  recTimeout = setTimeout(stopShaderRecord, secs * 1000);
+}
+
+function stopShaderRecord() {
+  if (recTimeout) { clearTimeout(recTimeout); recTimeout = 0; }
+  if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
 }
 
 function randomize() {
