@@ -165,7 +165,9 @@ void main(){
   float grad = clamp((u_height - uv.y) / max(u_height, 0.001), 0.0, 1.0);
   grad = pow(grad, u_falloff);
   float heat = clamp(n * u_intensity * grad, 0.0, 1.0);
-  heat = max(heat, 1.0 - smoothstep(u_base, u_base + 0.06, uv.y));   // solid base block of height u_base
+  float baseWave = (fbm(vec2(uv.x * 2.5, 7.3)) - 0.5) * 0.12;        // static wavy boundary
+  float baseTop = u_base + baseWave;
+  heat = max(heat, 1.0 - smoothstep(baseTop, baseTop + 0.22, uv.y)); // solid base, organic dithered dissolve upward
   // Ordered-dithered posterization — the plasma "pixel dither" look.
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
@@ -221,7 +223,9 @@ void main(){
   comb = pow(comb, u_separation);
   float sep = mix(1.0, comb, smoothstep(0.0, u_height * 0.6, uv.y));
   heat *= sep;
-  heat = max(heat, 1.0 - smoothstep(u_base, u_base + 0.06, uv.y));   // solid base block of height u_base
+  float baseWave = (fbm(vec2(uv.x * 2.5, 7.3)) - 0.5) * 0.12;        // static wavy boundary
+  float baseTop = u_base + baseWave;
+  heat = max(heat, 1.0 - smoothstep(baseTop, baseTop + 0.22, uv.y)); // solid base, organic dithered dissolve upward
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
   float qStep = 1.0 / (lv - 1.0);
