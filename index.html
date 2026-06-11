@@ -205,6 +205,27 @@
     </section>
 
     <section class="group">
+      <h2>Canvas size</h2>
+      <div class="row">
+        <label>Ratio</label>
+        <select id="shaderRatio">
+          <option value="fit" selected>Fit screen</option>
+          <option value="1:1">1:1 — 1080×1080</option>
+          <option value="4:5">4:5 — 1080×1350</option>
+          <option value="9:16">9:16 — 1080×1920</option>
+          <option value="16:9">16:9 — 1920×1080</option>
+          <option value="custom">Custom (px)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label>Width</label>
+        <input type="number" id="shaderW" min="16" max="4096" step="1" />
+        <label style="flex:0 0 auto;">Height</label>
+        <input type="number" id="shaderH" min="16" max="4096" step="1" />
+      </div>
+    </section>
+
+    <section class="group">
       <h2>Export code</h2>
       <div class="row">
         <label class="check" style="flex:1;">
@@ -287,6 +308,6 @@
 <video id="vid" hidden playsinline muted loop></video>
 
 <script src="app.js?v=16" type="module"></script>
-<script src="shader.js?v=5" type="module"></script>
+<script src="shader.js?v=6" type="module"></script>
 </body>
 </html>

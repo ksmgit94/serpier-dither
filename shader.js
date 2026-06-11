@@ -143,12 +143,13 @@ void main(){
       { key: 'u_intensity', label: 'Intensity', group: 'Fire', min: 0.5, max: 4, step: 0.05, value: 1.8 },
       { key: 'u_scale', label: 'Detail', group: 'Fire', min: 1, max: 8, step: 0.1, value: 3.0 },
       { key: 'u_riseSpeed', label: 'Rise speed', group: 'Fire', min: 0, max: 3, step: 0.05, value: 1.2 },
+      { key: 'u_base', label: 'Base height', group: 'Fire', min: 0, max: 0.6, step: 0.01, value: 0.12 },
       { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
       { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 3, max: 8, step: 1, value: 5 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 1.0 },
     ],
     frag: GLSL_HEAD + `
-uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed;
+uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed, u_base;
 uniform vec3 u_c1, u_c2, u_c3;
 ` + GLSL_NOISE + GLSL_BAYER + `
 void main(){
@@ -164,6 +165,7 @@ void main(){
   float grad = clamp((u_height - uv.y) / max(u_height, 0.001), 0.0, 1.0);
   grad = pow(grad, u_falloff);
   float heat = clamp(n * u_intensity * grad, 0.0, 1.0);
+  heat = max(heat, 1.0 - smoothstep(u_base, u_base + 0.06, uv.y));   // solid base block of height u_base
   // Ordered-dithered posterization — the plasma "pixel dither" look.
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
@@ -193,12 +195,13 @@ void main(){
       { key: 'u_intensity', label: 'Intensity', group: 'Flames', min: 0.5, max: 4, step: 0.05, value: 2.0 },
       { key: 'u_scale', label: 'Detail', group: 'Flames', min: 1, max: 8, step: 0.1, value: 3.0 },
       { key: 'u_riseSpeed', label: 'Rise speed', group: 'Flames', min: 0, max: 3, step: 0.05, value: 1.4 },
+      { key: 'u_base', label: 'Base height', group: 'Flames', min: 0, max: 0.6, step: 0.01, value: 0.12 },
       { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
       { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 3, max: 8, step: 1, value: 5 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 1.0 },
     ],
     frag: GLSL_HEAD + `
-uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed, u_count, u_separation;
+uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed, u_count, u_separation, u_base;
 uniform vec3 u_c1, u_c2, u_c3;
 ` + GLSL_NOISE + GLSL_BAYER + `
 void main(){
@@ -218,6 +221,7 @@ void main(){
   comb = pow(comb, u_separation);
   float sep = mix(1.0, comb, smoothstep(0.0, u_height * 0.6, uv.y));
   heat *= sep;
+  heat = max(heat, 1.0 - smoothstep(u_base, u_base + 0.06, uv.y));   // solid base block of height u_base
   float lv = max(2.0, u_levels);
   float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
   float qStep = 1.0 / (lv - 1.0);
@@ -376,6 +380,15 @@ const state = {
   presetId: PRESETS[0].id,
   values: {}, // key -> number | hex string
   transparentBg: false,
+  canvas: { mode: 'fit', w: 1080, h: 1080 }, // mode: 'fit' (fill stage) | 'fixed'
+};
+
+// Aspect presets -> default pixel sizes.
+const RATIOS = {
+  '1:1': [1080, 1080],
+  '4:5': [1080, 1350],
+  '9:16': [1080, 1920],
+  '16:9': [1920, 1080],
 };
 function presetById(id) { return PRESETS.find((p) => p.id === id) || PRESETS[0]; }
 function loadPresetDefaults(preset) {
@@ -444,12 +457,48 @@ function ensureGL() {
 }
 
 function resizeCanvas() {
-  const w = Math.max(1, Math.floor(canvas.clientWidth));
-  const h = Math.max(1, Math.floor(canvas.clientHeight));
+  let w, h;
+  if (state.canvas.mode === 'fixed') {
+    w = state.canvas.w; h = state.canvas.h;
+  } else {
+    w = Math.max(1, Math.floor(canvas.clientWidth));
+    h = Math.max(1, Math.floor(canvas.clientHeight));
+  }
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w; canvas.height = h;
   }
   gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+// Make the preview element fill the stage (fit) or display at its fixed
+// resolution scaled to fit while preserving aspect ratio.
+function applyCanvasStyle() {
+  if (!canvas) return;
+  if (state.canvas.mode === 'fixed') {
+    canvas.style.width = 'auto';
+    canvas.style.height = 'auto';
+    canvas.style.maxWidth = '100%';
+    canvas.style.maxHeight = '100%';
+  } else {
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.maxWidth = '';
+    canvas.style.maxHeight = '';
+  }
+}
+
+// Grey out the W/H inputs when fitting to the stage.
+function syncCanvasInputs() {
+  const fit = state.canvas.mode === 'fit';
+  const w = $('shaderW'), h = $('shaderH');
+  if (w) w.disabled = fit;
+  if (h) h.disabled = fit;
+}
+
+// Return the matching ratio key for an exact pixel size, else 'custom'.
+function matchRatio(w, h) {
+  for (const k in RATIOS) { if (RATIOS[k][0] === w && RATIOS[k][1] === h) return k; }
+  return 'custom';
 }
 
 function currentSpeed() {
@@ -761,6 +810,36 @@ function initShaderUI() {
   });
   $('shaderExportAnim').addEventListener('click', exportAnimation);
   $('shaderStopRec').addEventListener('click', stopShaderRecord);
+
+  // Canvas size / ratio
+  $('shaderW').value = state.canvas.w;
+  $('shaderH').value = state.canvas.h;
+  syncCanvasInputs();
+  $('shaderRatio').addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v === 'fit') {
+      state.canvas.mode = 'fit';
+    } else if (v === 'custom') {
+      state.canvas.mode = 'fixed';
+    } else {
+      const [w, h] = RATIOS[v];
+      state.canvas = { mode: 'fixed', w, h };
+      $('shaderW').value = w; $('shaderH').value = h;
+    }
+    syncCanvasInputs();
+    applyCanvasStyle();
+  });
+  const onSizeInput = () => {
+    const w = Math.max(16, Math.min(4096, parseInt($('shaderW').value, 10) || 16));
+    const h = Math.max(16, Math.min(4096, parseInt($('shaderH').value, 10) || 16));
+    state.canvas = { mode: 'fixed', w, h };
+    $('shaderRatio').value = matchRatio(w, h);
+    syncCanvasInputs();
+    applyCanvasStyle();
+  };
+  $('shaderW').addEventListener('change', onSizeInput);
+  $('shaderH').addEventListener('change', onSizeInput);
+  applyCanvasStyle();
 
   $('shaderCopy').addEventListener('click', async () => {
     try {
