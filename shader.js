@@ -127,6 +127,52 @@ void main(){
   },
 
   {
+    id: 'fire',
+    name: 'Dithered Fire',
+    component: 'FireBackground',
+    speed: 1.0,
+    controls: [
+      { key: 'u_c1', label: 'Flame core', group: 'Colors', type: 'color', value: '#b3261a' },
+      { key: 'u_c2', label: 'Mid', group: 'Colors', type: 'color', value: '#ff6a00' },
+      { key: 'u_c3', label: 'Tip', group: 'Colors', type: 'color', value: '#ffe08a' },
+      { key: 'u_height', label: 'Flame height', group: 'Fire', min: 0.2, max: 1, step: 0.01, value: 0.85 },
+      { key: 'u_falloff', label: 'Falloff', group: 'Fire', min: 0.5, max: 5, step: 0.05, value: 2.0 },
+      { key: 'u_intensity', label: 'Intensity', group: 'Fire', min: 0.5, max: 4, step: 0.05, value: 1.8 },
+      { key: 'u_scale', label: 'Detail', group: 'Fire', min: 1, max: 8, step: 0.1, value: 3.0 },
+      { key: 'u_riseSpeed', label: 'Rise speed', group: 'Fire', min: 0, max: 3, step: 0.05, value: 1.2 },
+      { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
+      { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 3, max: 8, step: 1, value: 5 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 1.0 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_pixelSize, u_levels, u_scale, u_intensity, u_height, u_falloff, u_riseSpeed;
+uniform vec3 u_c1, u_c2, u_c3;
+` + GLSL_NOISE + GLSL_BAYER + `
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
+  vec2 uv = (cell * u_pixelSize) / u_resolution;   // y is 0 at bottom, 1 at top
+  float t = u_time;
+  // Rising, domain-warped noise makes the flame licks.
+  vec2 sp = vec2(uv.x * u_scale, uv.y * u_scale - t * u_riseSpeed);
+  float n1 = fbm(sp);
+  float n2 = fbm(sp * 2.0 + vec2(n1 * 1.5, -t * u_riseSpeed));
+  float n = mix(n1, n2, 0.6);
+  // Confine the heat to the bottom and let it taper off upward.
+  float grad = clamp((u_height - uv.y) / max(u_height, 0.001), 0.0, 1.0);
+  grad = pow(grad, u_falloff);
+  float heat = clamp(n * u_intensity * grad, 0.0, 1.0);
+  // Ordered-dithered posterization — the plasma "pixel dither" look.
+  float lv = max(2.0, u_levels);
+  float q = clamp(floor(heat * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
+  // Fire colour ramp.
+  vec3 col = mix(u_c1, u_c2, smoothstep(0.0, 0.55, q));
+  col = mix(col, u_c3, smoothstep(0.5, 1.0, q));
+  float a = step(0.5 / (lv - 1.0), q);   // lowest band -> clear; dotty flame tips
+  gl_FragColor = vec4(col, a);
+}`,
+  },
+
+  {
     id: 'aurora',
     name: 'Flowing Aurora',
     component: 'AuroraBackground',
