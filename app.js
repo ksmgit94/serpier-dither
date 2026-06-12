@@ -77,6 +77,12 @@ const LINE_RAMP = [
   svg('<rect x="0" y="0" width="100" height="100" fill="currentColor"/>'),
 ];
 
+// Solid centred squares that grow with luminance — reproduces the chunky
+// square-pixel ordered-dither look of the "Dithered Fire" shader style.
+const pixelSquare = (s) =>
+  svg(`<rect x="${(100 - s) / 2}" y="${(100 - s) / 2}" width="${s}" height="${s}" fill="currentColor"/>`);
+const PIXEL_RAMP = [26, 42, 56, 70, 82, 92, 100].map(pixelSquare);
+
 // ---------- Serpier-branded presets ----------
 // Each ramp is a fractal dither: every dither cell IS a 3×3 sub-grid filled
 // progressively from sparse to dense, with state 3 = the Serpier signature
@@ -176,6 +182,20 @@ const SERPIER_PRESETS = {
 
 // ---------- generic built-in presets ----------
 const BUILTIN_PRESETS = {
+  pixelBlue: {
+    label: 'Pixel Dither (Blue)',
+    settings: {
+      // Square-pixel dithering like the "Dithered Fire" shader: full-cell
+      // squares grow with luminance and tile seamlessly into solid areas.
+      gridCells: 110, aspect: 'original',
+      bgOn: true, bgColor: '#05060f',
+      svgs: [...PIXEL_RAMP],
+      colors: Array(7).fill('#133BFF'),
+      enabled: [true, true, true, true, true, true, true],
+      invert: false, scaleMin: 1.0, scaleMax: 1.0,
+      rotation: 0, randomRot: false,
+    },
+  },
   halftone: {
     label: 'Halftone Print',
     settings: {
