@@ -387,37 +387,53 @@ void main(){
       { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#113BFF' },
       { key: 'u_fg', label: 'Particle / core', group: 'Colors', type: 'color', value: '#ffffff' },
       { key: 'u_core', label: 'Core size', group: 'Black hole', min: 0, max: 0.5, step: 0.005, value: 0.0 },
-      { key: 'u_intensity', label: 'Intensity', group: 'Black hole', min: 0.3, max: 4, step: 0.05, value: 1.8 },
-      { key: 'u_density', label: 'Particle density', group: 'Black hole', min: 1, max: 12, step: 0.1, value: 5.0 },
-      { key: 'u_falloff', label: 'Spread / fade', group: 'Black hole', min: 0.5, max: 6, step: 0.05, value: 2.5 },
-      { key: 'u_swirl', label: 'Swirl', group: 'Black hole', min: -2, max: 2, step: 0.01, value: 0.4 },
+      { key: 'u_count', label: 'Particles', group: 'Black hole', min: 1, max: 40, step: 1, value: 10 },
+      { key: 'u_size', label: 'Particle size (px)', group: 'Black hole', min: 1, max: 20, step: 0.5, value: 2 },
+      { key: 'u_reach', label: 'Reach', group: 'Black hole', min: 0.2, max: 1.2, step: 0.01, value: 0.75 },
+      { key: 'u_rate', label: 'Emit rate', group: 'Black hole', min: 0.1, max: 3, step: 0.05, value: 0.7 },
+      { key: 'u_swirl', label: 'Swirl', group: 'Black hole', min: -2, max: 2, step: 0.01, value: 0.2 },
       { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
       { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 2, max: 8, step: 1, value: 4 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 3, step: 0.01, value: 1.0 },
     ],
     frag: GLSL_HEAD + `
-uniform float u_pixelSize, u_levels, u_core, u_intensity, u_density, u_falloff, u_swirl, u_transparent;
+uniform float u_pixelSize, u_levels, u_core, u_count, u_size, u_reach, u_rate, u_swirl, u_transparent;
 uniform vec3 u_bg, u_fg;
-` + GLSL_NOISE + GLSL_BAYER + `
+` + GLSL_BAYER + `
+float h11(float n){ return fract(sin(n * 127.1) * 43758.5453); }
 void main(){
   vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
   vec2 frag = (cell + 0.5) * u_pixelSize;
-  vec2 p = (frag - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y); // centred, aspect-correct
-  float r = length(p) + 1e-4;
-  float ang = atan(p.y, p.x) + u_time * u_swirl;       // swirl over time
+  float minDim = min(u_resolution.x, u_resolution.y);
+  vec2 p = (frag - 0.5 * u_resolution) / minDim;   // centred, aspect-correct
+  float cellN = u_pixelSize / minDim;              // one pixel cell, in p-units
   float t = u_time;
-  // Particles stream outward: noise scrolls along radius, varies around angle.
-  float stream = fbm(vec2(ang * u_density, r * u_density - t));
-  float fine = fbm(vec2(ang * u_density * 2.0 + t * 0.3, r * u_density * 2.0 - t * 1.7));
-  float field = mix(stream, fine, 0.5);
-  float fade = exp(-r * u_falloff);                    // particles thin out with distance
-  float particles = field * fade * u_intensity;
-  float core = 1.0 - smoothstep(u_core * 0.6, u_core, r); // bright centre, 0 size = none
-  float val = clamp(max(core, particles), 0.0, 1.0);
+  float val = 0.0;
+  // Discrete particles: each repeatedly spawns at the centre and flies out
+  // along a fresh random angle, so only a few pixels stream out at a time.
+  int count = int(u_count);
+  for (int i = 0; i < 40; i++) {
+    if (i >= count) break;
+    float fi = float(i);
+    float ph = t * u_rate + h11(fi * 1.7);
+    float cyc = floor(ph);
+    float life = fract(ph);                                  // 0..1 flight progress
+    float ang = h11(fi * 3.3 + cyc * 5.1) * 6.2831 + t * u_swirl;
+    float spd = 0.55 + 0.9 * h11(fi * 2.1 + cyc * 1.7);
+    float rad = life * u_reach * spd;                        // outward from centre
+    vec2 pp = vec2(cos(ang), sin(ang)) * rad;
+    float dot = smoothstep(u_size * cellN, 0.0, length(p - pp)); // small pixel
+    dot *= smoothstep(0.0, 0.08, life);                      // fade in at spawn
+    dot *= (1.0 - life);                                     // fade out as it flies
+    val = max(val, dot);
+  }
+  float r = length(p);
+  val = max(val, 1.0 - smoothstep(u_core * 0.6, u_core, r)); // central core (0 = none)
+  val = clamp(val, 0.0, 1.0);
   float lv = max(2.0, u_levels);
   float q = clamp(floor(val * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
   vec3 col = mix(u_bg, u_fg, q);
-  float a = mix(1.0, q, u_transparent);                // transparent -> only particles/core opaque
+  float a = mix(1.0, q, u_transparent);
   gl_FragColor = vec4(col, a);
 }`,
   },
