@@ -422,13 +422,14 @@ void main(){
     float spd = 0.55 + 0.9 * h11(fi * 2.1 + cyc * 1.7);
     float rad = life * u_reach * spd;                        // outward from centre
     vec2 pp = vec2(cos(ang), sin(ang)) * rad;
-    float dot = smoothstep(u_size * cellN, 0.0, length(p - pp)); // small pixel
-    dot *= smoothstep(0.0, 0.08, life);                      // fade in at spawn
-    dot *= (1.0 - life);                                     // fade out as it flies
-    val = max(val, dot);
+    vec2 dCell = (p - pp) / cellN;                           // delta in pixel cells
+    float half = u_size * 0.5;
+    float sq = step(abs(dCell.x), half) * step(abs(dCell.y), half); // SOLID hard square
+    sq *= step(life, 0.92);                                  // blink off briefly before respawn
+    val = max(val, sq);
   }
   float r = length(p);
-  val = max(val, 1.0 - smoothstep(u_core * 0.6, u_core, r)); // central core (0 = none)
+  val = max(val, 1.0 - step(u_core, r));                     // solid central core (0 = none)
   val = clamp(val, 0.0, 1.0);
   float lv = max(2.0, u_levels);
   float q = clamp(floor(val * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
