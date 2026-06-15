@@ -423,8 +423,8 @@ void main(){
     float rad = life * u_reach * spd;                        // outward from centre
     vec2 pp = vec2(cos(ang), sin(ang)) * rad;
     vec2 dCell = (p - pp) / cellN;                           // delta in pixel cells
-    float half = u_size * 0.5;
-    float sq = step(abs(dCell.x), half) * step(abs(dCell.y), half); // SOLID hard square
+    float hsz = u_size * 0.5;
+    float sq = step(abs(dCell.x), hsz) * step(abs(dCell.y), hsz); // SOLID hard square
     sq *= step(life, 0.92);                                  // blink off briefly before respawn
     val = max(val, sq);
   }
