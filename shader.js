@@ -438,6 +438,50 @@ void main(){
   gl_FragColor = vec4(col, a);
 }`,
   },
+
+  {
+    id: 'blackhole2',
+    name: 'Black Hole v2 (rays)',
+    component: 'BlackHoleRaysBackground',
+    speed: 1.0,
+    controls: [
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#113BFF' },
+      { key: 'u_fg', label: 'Particle / core', group: 'Colors', type: 'color', value: '#ffffff' },
+      { key: 'u_core', label: 'Core size', group: 'Black hole', min: 0, max: 0.5, step: 0.005, value: 0.0 },
+      { key: 'u_intensity', label: 'Intensity', group: 'Black hole', min: 0.3, max: 4, step: 0.05, value: 1.8 },
+      { key: 'u_density', label: 'Particle density', group: 'Black hole', min: 1, max: 12, step: 0.1, value: 5.0 },
+      { key: 'u_falloff', label: 'Spread / fade', group: 'Black hole', min: 0.5, max: 6, step: 0.05, value: 2.5 },
+      { key: 'u_swirl', label: 'Swirl', group: 'Black hole', min: -2, max: 2, step: 0.01, value: 0.4 },
+      { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
+      { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 2, max: 8, step: 1, value: 4 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 3, step: 0.01, value: 1.0 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_pixelSize, u_levels, u_core, u_intensity, u_density, u_falloff, u_swirl, u_transparent;
+uniform vec3 u_bg, u_fg;
+` + GLSL_NOISE + GLSL_BAYER + `
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
+  vec2 frag = (cell + 0.5) * u_pixelSize;
+  vec2 p = (frag - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y); // centred, aspect-correct
+  float r = length(p) + 1e-4;
+  float ang = atan(p.y, p.x) + u_time * u_swirl;       // swirl over time
+  float t = u_time;
+  // Particles stream outward: noise scrolls along radius, varies around angle.
+  float stream = fbm(vec2(ang * u_density, r * u_density - t));
+  float fine = fbm(vec2(ang * u_density * 2.0 + t * 0.3, r * u_density * 2.0 - t * 1.7));
+  float field = mix(stream, fine, 0.5);
+  float fade = exp(-r * u_falloff);                    // particles thin out with distance
+  float particles = field * fade * u_intensity;
+  float core = 1.0 - smoothstep(u_core * 0.6, u_core, r); // bright centre, 0 size = none
+  float val = clamp(max(core, particles), 0.0, 1.0);
+  float lv = max(2.0, u_levels);
+  float q = clamp(floor(val * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
+  vec3 col = mix(u_bg, u_fg, q);
+  float a = mix(1.0, q, u_transparent);                // transparent -> only particles/core opaque
+  gl_FragColor = vec4(col, a);
+}`,
+  },
 ];
 
 // ---------- live state ----------
