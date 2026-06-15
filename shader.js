@@ -377,6 +377,50 @@ void main(){
   gl_FragColor = vec4(col, 1.0);
 }`,
   },
+
+  {
+    id: 'blackhole',
+    name: 'Black Hole (particles)',
+    component: 'BlackHoleBackground',
+    speed: 1.0,
+    controls: [
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#113BFF' },
+      { key: 'u_fg', label: 'Particle / core', group: 'Colors', type: 'color', value: '#ffffff' },
+      { key: 'u_core', label: 'Core size', group: 'Black hole', min: 0, max: 0.5, step: 0.005, value: 0.0 },
+      { key: 'u_intensity', label: 'Intensity', group: 'Black hole', min: 0.3, max: 4, step: 0.05, value: 1.8 },
+      { key: 'u_density', label: 'Particle density', group: 'Black hole', min: 1, max: 12, step: 0.1, value: 5.0 },
+      { key: 'u_falloff', label: 'Spread / fade', group: 'Black hole', min: 0.5, max: 6, step: 0.05, value: 2.5 },
+      { key: 'u_swirl', label: 'Swirl', group: 'Black hole', min: -2, max: 2, step: 0.01, value: 0.4 },
+      { key: 'u_pixelSize', label: 'Pixel size', group: 'Dither', min: 1, max: 24, step: 1, value: 6 },
+      { key: 'u_levels', label: 'Color steps', group: 'Dither', min: 2, max: 8, step: 1, value: 4 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 3, step: 0.01, value: 1.0 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_pixelSize, u_levels, u_core, u_intensity, u_density, u_falloff, u_swirl, u_transparent;
+uniform vec3 u_bg, u_fg;
+` + GLSL_NOISE + GLSL_BAYER + `
+void main(){
+  vec2 cell = floor(gl_FragCoord.xy / u_pixelSize);
+  vec2 frag = (cell + 0.5) * u_pixelSize;
+  vec2 p = (frag - 0.5 * u_resolution) / min(u_resolution.x, u_resolution.y); // centred, aspect-correct
+  float r = length(p) + 1e-4;
+  float ang = atan(p.y, p.x) + u_time * u_swirl;       // swirl over time
+  float t = u_time;
+  // Particles stream outward: noise scrolls along radius, varies around angle.
+  float stream = fbm(vec2(ang * u_density, r * u_density - t));
+  float fine = fbm(vec2(ang * u_density * 2.0 + t * 0.3, r * u_density * 2.0 - t * 1.7));
+  float field = mix(stream, fine, 0.5);
+  float fade = exp(-r * u_falloff);                    // particles thin out with distance
+  float particles = field * fade * u_intensity;
+  float core = 1.0 - smoothstep(u_core * 0.6, u_core, r); // bright centre, 0 size = none
+  float val = clamp(max(core, particles), 0.0, 1.0);
+  float lv = max(2.0, u_levels);
+  float q = clamp(floor(val * (lv - 1.0) + Bayer8(cell)) / (lv - 1.0), 0.0, 1.0);
+  vec3 col = mix(u_bg, u_fg, q);
+  float a = mix(1.0, q, u_transparent);                // transparent -> only particles/core opaque
+  gl_FragColor = vec4(col, a);
+}`,
+  },
 ];
 
 // ---------- live state ----------
@@ -928,28 +972,70 @@ function buildZip(files) {
 // ---------- offline frame export helpers ----------
 function exportFrameCount() {
   const fps = parseInt($('shaderFps').value, 10) || 30;
-  const secs = parseFloat($('shaderVidLen').value) || 5;
-  const total = Math.min(450, Math.max(1, Math.round(fps * secs)));
+  const secs = Math.max(0.2, Math.min(60, parseFloat($('shaderSecs').value) || 5));
+  const total = Math.min(1800, Math.max(1, Math.round(fps * secs)));
   return { fps, secs, total };
+}
+
+// Scratch buffers (top-left origin RGBA) reused across frames.
+let _glPixels = null, _bufOut = null, _bufA = null, _bufB = null, _pngCanvas = null;
+function ensureScratch(w, h) {
+  const n = w * h * 4;
+  if (!_glPixels || _glPixels.length !== n) {
+    _glPixels = new Uint8Array(n); _bufOut = new Uint8Array(n);
+    _bufA = new Uint8Array(n); _bufB = new Uint8Array(n);
+  }
+  if (!_pngCanvas) _pngCanvas = document.createElement('canvas');
+  if (_pngCanvas.width !== w || _pngCanvas.height !== h) { _pngCanvas.width = w; _pngCanvas.height = h; }
+}
+// readPixels is bottom-up; flip into a top-left-origin buffer.
+function readFlipped(dst, w, h) {
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, _glPixels);
+  const rb = w * 4;
+  for (let y = 0; y < h; y++) dst.set(_glPixels.subarray((h - 1 - y) * rb, (h - y) * rb), y * rb);
+}
+// Produce output frame i of N into _bufOut. Seamless uses a forward crossfade
+// loop: out[i] = (1-i/N)*s[i+N] + (i/N)*s[i], which closes the loop because the
+// wrap point lands between consecutive source frames (no seam, motion stays forward).
+function renderLoopFrameRGBA(i, N, fps, seamless, w, h) {
+  if (!seamless) {
+    drawAt(i / fps);
+    readFlipped(_bufOut, w, h);
+    return;
+  }
+  drawAt((i + N) / fps); readFlipped(_bufA, w, h);
+  drawAt(i / fps);       readFlipped(_bufB, w, h);
+  const wB = i / N, wA = 1 - wB;
+  for (let k = 0; k < _bufOut.length; k++) _bufOut[k] = (_bufA[k] * wA + _bufB[k] * wB) | 0;
+}
+
+function rgbaToPngBytes(w, h) {
+  const ctx = _pngCanvas.getContext('2d');
+  const img = ctx.createImageData(w, h);
+  img.data.set(_bufOut);
+  ctx.putImageData(img, 0, 0);
+  return new Promise((resolve) => _pngCanvas.toBlob(async (b) => resolve(new Uint8Array(await b.arrayBuffer())), 'image/png'));
 }
 
 // PNG image sequence (zip) — full 8-bit alpha. Import into Premiere as an image sequence.
 async function exportPngSequence() {
   stopLoop();
   resizeCanvas();
-  const { fps, total } = exportFrameCount();
+  const { fps, total, secs } = exportFrameCount();
+  const w = canvas.width, h = canvas.height;
+  const seamless = $('shaderLoop').checked;
+  ensureScratch(w, h);
   const files = [];
   $('shaderExportAnim').disabled = true;
   try {
     for (let i = 0; i < total; i++) {
-      drawAt(i / fps);
-      const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
-      const buf = new Uint8Array(await blob.arrayBuffer());
-      files.push({ name: `${state.presetId}_${String(i + 1).padStart(4, '0')}.png`, data: buf });
+      renderLoopFrameRGBA(i, total, fps, seamless, w, h);
+      const bytes = await rgbaToPngBytes(w, h);
+      files.push({ name: `${state.presetId}_${String(i + 1).padStart(4, '0')}.png`, data: bytes });
       if (i % 4 === 0) { $('shaderRecStatus').textContent = `Rendering PNG ${i + 1}/${total}…`; await new Promise((r) => setTimeout(r, 0)); }
     }
-    downloadBlob(buildZip(files), `${state.presetId}-frames.zip`);
-    $('shaderRecStatus').textContent = `Saved ${total} transparent PNG frames · in Premiere: File ▸ Import, select frame 0001, tick "Image Sequence", set ${fps} fps`;
+    downloadBlob(buildZip(files), `${state.presetId}-${secs}s.zip`);
+    $('shaderRecStatus').textContent = `Saved ${total} PNG frames${seamless ? ' (seamless loop)' : ''} · Premiere: File ▸ Import, pick frame 0001, tick "Image Sequence", set ${fps} fps`;
   } catch (e) {
     console.error(e); $('shaderRecStatus').textContent = 'PNG export failed: ' + e.message;
   } finally {
@@ -958,42 +1044,43 @@ async function exportPngSequence() {
   }
 }
 
-// Animated transparent GIF (single file).
+// Animated GIF (single file, transparent-capable, infinite loop, exact length).
 async function exportGifAnim() {
   stopLoop();
   resizeCanvas();
-  const { fps, total } = exportFrameCount();
+  const { fps, total, secs } = exportFrameCount();
   const w = canvas.width, h = canvas.height;
+  const seamless = $('shaderLoop').checked;
+  ensureScratch(w, h);
   const enc = GIFEncoder();
-  const delay = Math.round(1000 / fps);
-  const pixels = new Uint8Array(w * h * 4);
-  const flipped = new Uint8Array(w * h * 4);
-  const rowBytes = w * 4;
+  const transparent = state.transparentBg || /float a =/.test(presetById(state.presetId).frag);
+  // Distribute centiseconds so the total duration is exactly `secs`.
+  let accCs = 0;
   $('shaderExportAnim').disabled = true;
   try {
     for (let i = 0; i < total; i++) {
-      drawAt(i / fps);
-      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-      for (let y = 0; y < h; y++) flipped.set(pixels.subarray((h - 1 - y) * rowBytes, (h - y) * rowBytes), y * rowBytes);
-      const opts = { delay, repeat: 0 };
+      renderLoopFrameRGBA(i, total, fps, seamless, w, h);
+      const targetCs = Math.round((i + 1) * 100 * secs / total);
+      const cs = Math.max(1, targetCs - accCs); accCs = targetCs;
+      const opts = { delay: cs * 10, repeat: 0 }; // repeat 0 = loop forever
       let palette, index;
-      if (state.transparentBg || /float a =/.test(presetById(state.presetId).frag)) {
-        palette = quantize(flipped, 256, { format: 'rgba4444', oneBitAlpha: true });
-        index = applyPalette(flipped, palette, 'rgba4444');
+      if (transparent) {
+        palette = quantize(_bufOut, 256, { format: 'rgba4444', oneBitAlpha: true });
+        index = applyPalette(_bufOut, palette, 'rgba4444');
         let ti = palette.findIndex((p) => p.length >= 4 && p[3] === 0);
         if (ti < 0) { ti = palette.length; palette.push([0, 0, 0, 0]); }
         opts.transparent = true; opts.transparentIndex = ti; opts.dispose = 2;
       } else {
-        palette = quantize(flipped, 256, { format: 'rgb565' });
-        index = applyPalette(flipped, palette, 'rgb565');
+        palette = quantize(_bufOut, 256, { format: 'rgb565' });
+        index = applyPalette(_bufOut, palette, 'rgb565');
       }
       opts.palette = palette;
       enc.writeFrame(index, w, h, opts);
       if (i % 4 === 0) { $('shaderRecStatus').textContent = `Encoding GIF ${i + 1}/${total}…`; await new Promise((r) => setTimeout(r, 0)); }
     }
     enc.finish();
-    downloadBlob(new Blob([enc.bytes()], { type: 'image/gif' }), `${state.presetId}.gif`);
-    $('shaderRecStatus').textContent = `Saved ${state.presetId}.gif · ${total} frames`;
+    downloadBlob(new Blob([enc.bytes()], { type: 'image/gif' }), `${state.presetId}-${secs}s.gif`);
+    $('shaderRecStatus').textContent = `Saved ${state.presetId}.gif · ${secs}s · ${total} frames${seamless ? ' · seamless loop' : ''}`;
   } catch (e) {
     console.error(e); $('shaderRecStatus').textContent = 'GIF export failed: ' + e.message;
   } finally {
@@ -1037,9 +1124,9 @@ function startShaderRecord() {
   mediaRec.start();
   $('shaderExportAnim').disabled = true;
   $('shaderStopRec').disabled = false;
-  const secs = parseFloat($('shaderVidLen').value) || 5;
+  const secs = Math.max(0.2, Math.min(60, parseFloat($('shaderSecs').value) || 5));
   const note = state.transparentBg ? ' · transparent (view in Chrome)' : '';
-  $('shaderRecStatus').textContent = `Recording ${secs}s${note}…`;
+  $('shaderRecStatus').textContent = `Recording ${secs}s${note}… (WebM loops via <video loop>; for a seamless loop use GIF/PNG)`;
   recTimeout = setTimeout(stopShaderRecord, secs * 1000);
 }
 
