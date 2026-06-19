@@ -613,6 +613,7 @@ async function loadVideo(file) {
   $('pauseBtn').disabled = false;
   $('exportVideo').disabled = false;
   $('exportLottie').disabled = false;
+  $('exportGif').disabled = false;
   // Render the first frame immediately so the user sees the video even if
   // autoplay is blocked. If play succeeds, the tick loop drives subsequent frames.
   requestRender();
