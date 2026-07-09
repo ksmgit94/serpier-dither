@@ -439,6 +439,53 @@ void main(){
 }`,
   },
 
+  {
+    id: 'blades',
+    name: 'Light Blades',
+    component: 'BladesBackground',
+    speed: 0.5,
+    controls: [
+      { key: 'u_top', label: 'Top', group: 'Colors', type: 'color', value: '#c6c9ee' },
+      { key: 'u_pop', label: 'Pop', group: 'Colors', type: 'color', value: '#133BFF' },
+      { key: 'u_deep', label: 'Deep', group: 'Colors', type: 'color', value: '#14206b' },
+      { key: 'u_bottom', label: 'Bottom', group: 'Colors', type: 'color', value: '#0a0d1c' },
+      { key: 'u_cols', label: 'Blades', group: 'Pattern', min: 2, max: 16, step: 1, value: 7 },
+      { key: 'u_slant', label: 'Slant', group: 'Pattern', min: 0, max: 1, step: 0.01, value: 0.3 },
+      { key: 'u_wave', label: 'Wave', group: 'Pattern', min: 0, max: 0.6, step: 0.01, value: 0.28 },
+      { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.2, step: 0.005, value: 0.07 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.5 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_cols, u_slant, u_wave, u_grain;
+uniform vec3 u_top, u_pop, u_deep, u_bottom;
+` + GLSL_NOISE + `
+float h1(float n){ return fract(sin(n) * 43758.5453); }
+vec3 ramp(float y){
+  y = clamp(y, 0.0, 1.0);
+  vec3 c = mix(u_top, u_pop, smoothstep(0.0, 0.34, y));
+  c = mix(c, u_deep, smoothstep(0.34, 0.64, y));
+  c = mix(c, u_bottom, smoothstep(0.64, 1.0, y));
+  return c;
+}
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float yTop = 1.0 - uv.y;                       // 0 at top, 1 at bottom
+  float t = u_time;
+  float xr = uv.x * u_cols;
+  float ci = floor(xr);
+  float cf = fract(xr);
+  // Per-blade vertical offset: a wave travelling right->left across the blades
+  // plus organic fbm, so the bright band ripples and drifts.
+  float wave = sin(ci * 0.85 + t) * 0.5 + (fbm(vec2(ci * 0.3, t * 0.12)) - 0.5);
+  float g = yTop + wave * u_wave + u_slant * cf; // slant makes the blades diagonal
+  vec3 col = ramp(g);
+  col *= mix(1.08, 0.72, cf);                     // per-blade overlap shading
+  float gr = (h1(dot(gl_FragCoord.xy, vec2(12.9898, 78.233)) + floor(t * 24.0)) - 0.5) * u_grain;
+  col += gr;
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`,
+  },
+
 ];
 
 // ---------- live state ----------
