@@ -486,6 +486,238 @@ void main(){
 }`,
   },
 
+  {
+    id: 'glassstack',
+    name: 'Glass Stack',
+    component: 'GlassStackBackground',
+    speed: 0.5,
+    controls: [
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#000000' },
+      { key: 'u_glass', label: 'Glass', group: 'Colors', type: 'color', value: '#133bff' },
+      { key: 'u_light', label: 'Highlight', group: 'Colors', type: 'color', value: '#ffffff' },
+      { key: 'u_deep', label: 'Shadow', group: 'Colors', type: 'color', value: '#040d33' },
+      { key: 'u_rows', label: 'Slabs', group: 'Stack', min: 3, max: 16, step: 1, value: 9 },
+      { key: 'u_width', label: 'Width', group: 'Stack', min: 0.15, max: 1.2, step: 0.01, value: 0.42 },
+      { key: 'u_bulge', label: 'Breath amount', group: 'Stack', min: 0, max: 0.6, step: 0.01, value: 0.22 },
+      { key: 'u_gap', label: 'Gap', group: 'Stack', min: 0, max: 0.2, step: 0.005, value: 0.05 },
+      { key: 'u_round', label: 'Roundness', group: 'Stack', min: 2, max: 8, step: 0.1, value: 4 },
+      { key: 'u_sheen', label: 'Sheen', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.75 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.5 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_rows, u_width, u_bulge, u_gap, u_round, u_sheen;
+uniform vec3 u_bg, u_glass, u_light, u_deep;
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float aspect = u_resolution.x / u_resolution.y;
+  float x = (uv.x - 0.5) * aspect;
+  float t = u_time;
+  float rows = max(2.0, u_rows);
+  float yr = uv.y * rows;
+  float row = floor(yr);
+  float f = fract(yr);
+  // Accordion breathing: each slab's width swells and settles with a phase
+  // offset down the stack, so a slow compression wave travels through it.
+  float breath = 0.5 + 0.5 * sin(row * 0.8 - t);
+  float w = u_width * (0.8 + u_bulge * (breath - 0.5) * 2.0);
+  float hh = max(0.03, 0.5 - u_gap);
+  vec2 q = vec2(x / max(w, 0.001), (f - 0.5) / hh);
+  float d = pow(abs(q.x), u_round) + pow(abs(q.y), u_round);   // superellipse slab
+  float inside = 1.0 - smoothstep(0.85, 1.0, d);
+  // A specular highlight glides across each slab, offset per row.
+  float sweep = sin(t * 0.6 + row * 1.7) * 0.55;
+  float spec = exp(-pow((q.x - sweep) * 3.5, 2.0));
+  float topLight = smoothstep(1.2, -1.2, q.y);                 // brighter toward slab top
+  vec3 col = mix(u_deep, u_glass, topLight);
+  col = mix(col, u_light, spec * u_sheen);
+  float rim = smoothstep(0.5, 1.0, d);                          // darkened rounded edges
+  col = mix(col, u_deep, rim * 0.65);
+  col = mix(u_bg, col, inside);
+  gl_FragColor = vec4(col, 1.0);
+}`,
+  },
+
+  {
+    id: 'bloomblinds',
+    name: 'Bloom Blinds',
+    component: 'BloomBlindsBackground',
+    speed: 0.6,
+    controls: [
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#000000' },
+      { key: 'u_c', label: 'Glow', group: 'Colors', type: 'color', value: '#133bff' },
+      { key: 'u_hot', label: 'Hot core', group: 'Colors', type: 'color', value: '#b9c8ff' },
+      { key: 'u_size', label: 'Light size', group: 'Light', min: 0.08, max: 0.6, step: 0.005, value: 0.28 },
+      { key: 'u_travel', label: 'Drift range', group: 'Light', min: 0, max: 0.45, step: 0.005, value: 0.22 },
+      { key: 'u_glow', label: 'Intensity', group: 'Light', min: 0.3, max: 3, step: 0.05, value: 1.5 },
+      { key: 'u_bands', label: 'Blinds', group: 'Blinds', min: 2, max: 16, step: 1, value: 7 },
+      { key: 'u_cut', label: 'Cut depth', group: 'Blinds', min: 0.5, max: 8, step: 0.05, value: 2.6 },
+      { key: 'u_leak', label: 'Leak', group: 'Blinds', min: 0, max: 0.3, step: 0.005, value: 0.05 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_bands, u_cut, u_size, u_travel, u_glow, u_leak;
+uniform vec3 u_bg, u_c, u_hot;
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float aspect = u_resolution.x / u_resolution.y;
+  vec2 p = vec2((uv.x - 0.5) * aspect, uv.y - 0.5);
+  float t = u_time;
+  // A soft light column drifts up and down behind fixed horizontal blinds.
+  float y1 = sin(t * 0.35) * u_travel;
+  float y2 = sin(t * 0.23 + 2.1) * u_travel * 0.7 - 0.1;
+  float s = u_size * (1.0 + 0.12 * sin(t * 0.5));      // gentle breathing
+  vec2 d1 = p - vec2(0.0, y1);
+  vec2 d2 = p - vec2(0.0, y2);
+  float g = exp(-dot(d1, d1) / (s * s));
+  g += 0.8 * exp(-dot(d2, d2) / (s * s * 1.8));
+  g *= u_glow;
+  // The blinds carve the glow into stacked lens shapes.
+  float band = 0.5 + 0.5 * cos(uv.y * u_bands * 6.2831);
+  float mask = pow(band, u_cut);
+  g *= mix(u_leak, 1.0, mask);
+  vec3 col = u_bg + u_c * g + u_hot * g * g * 0.55;
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`,
+  },
+
+  {
+    id: 'cascade',
+    name: 'Gradient Cascade',
+    component: 'GradientCascadeBackground',
+    speed: 0.6,
+    controls: [
+      { key: 'u_paper', label: 'Paper', group: 'Colors', type: 'color', value: '#eae7e0' },
+      { key: 'u_ink', label: 'Ink', group: 'Colors', type: 'color', value: '#133bff' },
+      { key: 'u_tint', label: 'Fade to', group: 'Colors', type: 'color', value: '#f6f4ef' },
+      { key: 'u_cols', label: 'Columns', group: 'Layout', min: 3, max: 12, step: 1, value: 7 },
+      { key: 'u_rows', label: 'Rows', group: 'Layout', min: 2, max: 10, step: 1, value: 4 },
+      { key: 'u_stagger', label: 'Stagger', group: 'Layout', min: 0, max: 1, step: 0.01, value: 0.35 },
+      { key: 'u_margin', label: 'Margin', group: 'Layout', min: 0, max: 0.15, step: 0.005, value: 0.03 },
+      { key: 'u_vshade', label: 'Panel shading', group: 'Gradient', min: 0, max: 1, step: 0.01, value: 0.35 },
+      { key: 'u_pulse', label: 'Breath', group: 'Gradient', min: 0, max: 0.5, step: 0.01, value: 0.12 },
+      { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.5, step: 0.005, value: 0.18 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_cols, u_rows, u_stagger, u_pulse, u_vshade, u_grain, u_margin;
+uniform vec3 u_paper, u_ink, u_tint;
+` + GLSL_NOISE + `
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float t = u_time;
+  float m = u_margin;
+  vec2 iuv = (uv - m) / max(1.0 - 2.0 * m, 0.001);
+  float inPage = step(0.0, iuv.x) * step(iuv.x, 1.0) * step(0.0, iuv.y) * step(iuv.y, 1.0);
+  float xc = iuv.x * u_cols;
+  float ci = floor(xc), cf = fract(xc);
+  float yc = (1.0 - iuv.y) * u_rows + ci * u_stagger;   // stagger cascades down-right
+  float ri = floor(yc), rf = fract(yc);
+  // The grid stays locked; each panel's gradient breathes on its own phase,
+  // so a slow shimmer wanders across the wall like light over paper.
+  float phg = hash(vec2(ci * 7.31, ri * 3.17)) * 6.2831;
+  float breathe = sin(t * 0.5 + phg) * u_pulse;
+  float g = 1.0 - smoothstep(0.05, 0.98, cf);           // ink at each panel's left edge
+  g += (0.5 - rf) * u_vshade;                            // darker panel tops -> visible seams
+  g += breathe;
+  float gr = (hash(gl_FragCoord.xy * 0.37) - 0.5) * u_grain;   // static print grain
+  g = clamp(g + gr, 0.0, 1.0);
+  vec3 panel = mix(u_tint, u_ink, g);
+  vec3 col = mix(u_paper + gr * 0.5, panel, inPage);
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`,
+  },
+
+  {
+    id: 'slicedorb',
+    name: 'Sliced Orb',
+    component: 'SlicedOrbBackground',
+    speed: 0.6,
+    controls: [
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#000000' },
+      { key: 'u_top', label: 'Top light', group: 'Colors', type: 'color', value: '#dfe6ff' },
+      { key: 'u_mid', label: 'Body', group: 'Colors', type: 'color', value: '#133bff' },
+      { key: 'u_low', label: 'Base', group: 'Colors', type: 'color', value: '#060f45' },
+      { key: 'u_radius', label: 'Radius', group: 'Orb', min: 0.1, max: 0.48, step: 0.005, value: 0.34 },
+      { key: 'u_soft', label: 'Edge softness', group: 'Orb', min: 0.002, max: 0.08, step: 0.001, value: 0.01 },
+      { key: 'u_glow', label: 'Halo', group: 'Orb', min: 0, max: 1, step: 0.01, value: 0.35 },
+      { key: 'u_slices', label: 'Slices', group: 'Slices', min: 4, max: 24, step: 1, value: 12 },
+      { key: 'u_gap', label: 'Gap', group: 'Slices', min: 0, max: 0.5, step: 0.01, value: 0.16 },
+      { key: 'u_wobble', label: 'Wobble', group: 'Slices', min: 0, max: 0.2, step: 0.002, value: 0.05 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_slices, u_gap, u_radius, u_wobble, u_soft, u_glow;
+uniform vec3 u_bg, u_top, u_mid, u_low;
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  float aspect = u_resolution.x / u_resolution.y;
+  vec2 p = vec2((uv.x - 0.5) * aspect, uv.y - 0.5);
+  float t = u_time;
+  float ys = uv.y * u_slices;
+  float si = floor(ys), sf = fract(ys);
+  // Each slice sways sideways on its own phase, so the orb wobbles
+  // like a physical sliced lamp slowly turning.
+  float shift = sin(t * 0.7 + si * 0.6) * u_wobble;
+  float rad = u_radius * (1.0 + 0.03 * sin(t * 0.9));   // subtle breathing
+  vec2 sp = vec2(p.x - shift, p.y);
+  float r = length(sp);
+  float body = 1.0 - smoothstep(rad - u_soft, rad, r);
+  float s = clamp(0.5 + sp.y / (2.0 * rad), 0.0, 1.0);  // 1 at top, 0 at bottom
+  vec3 col = mix(u_low, u_mid, smoothstep(0.0, 0.55, s));
+  col = mix(col, u_top, smoothstep(0.55, 1.0, s));
+  float gh = u_gap * 0.5;
+  float open = smoothstep(gh, gh + 0.06, sf) * (1.0 - smoothstep(1.0 - gh - 0.06, 1.0 - gh, sf));
+  float ao = smoothstep(0.0, 0.30, sf) * (1.0 - smoothstep(0.70, 1.0, sf));
+  col *= mix(0.55, 1.0, ao);                             // shadowed slice edges
+  float halo = exp(-max(r - rad, 0.0) * 9.0) * u_glow;
+  vec3 outCol = mix(u_bg, col, body * open);
+  outCol += u_mid * halo * (1.0 - body * open) * 0.5;
+  gl_FragColor = vec4(clamp(outCol, 0.0, 1.0), 1.0);
+}`,
+  },
+
+  {
+    id: 'wavecurtain',
+    name: 'Wave Curtain',
+    component: 'WaveCurtainBackground',
+    speed: 0.6,
+    controls: [
+      { key: 'u_lit', label: 'Lit', group: 'Colors', type: 'color', value: '#4f6dff' },
+      { key: 'u_deep', label: 'Deep', group: 'Colors', type: 'color', value: '#0a1f9e' },
+      { key: 'u_scale', label: 'Scale', group: 'Waves', min: 1, max: 8, step: 0.05, value: 3 },
+      { key: 'u_freq', label: 'Frequency', group: 'Waves', min: 1, max: 8, step: 0.05, value: 3.2 },
+      { key: 'u_warp', label: 'Warp', group: 'Waves', min: 0, max: 8, step: 0.05, value: 3.5 },
+      { key: 'u_flow', label: 'Flow', group: 'Waves', min: 0, max: 3, step: 0.05, value: 1 },
+      { key: 'u_sharp', label: 'Sharpness', group: 'Waves', min: 0.5, max: 6, step: 0.05, value: 2.2 },
+      { key: 'u_shadow', label: 'Shadow', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.5 },
+      { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.3, step: 0.005, value: 0.08 },
+      { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
+    ],
+    frag: GLSL_HEAD + `
+uniform float u_scale, u_freq, u_warp, u_flow, u_sharp, u_shadow, u_grain;
+uniform vec3 u_deep, u_lit;
+` + GLSL_NOISE + `
+void main(){
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  uv.x *= u_resolution.x / u_resolution.y;
+  float t = u_time * 0.3;
+  vec2 p = uv * u_scale;
+  // Continuous melt: fbm-warped tongues advect slowly downward and morph
+  // as they flow, so the pattern never visibly repeats.
+  float n = fbm(p * 0.6 + vec2(0.0, t));
+  float ridge = sin(p.x * u_freq + n * u_warp + sin(p.y * 1.4 - t * u_flow) * 1.5);
+  float hi = pow(0.5 + 0.5 * ridge, u_sharp);
+  // A second, vertically offset sample acts as the overhang shadow.
+  float n2 = fbm(p * 0.6 + vec2(0.0, t + 0.3));
+  float ridge2 = sin(p.x * u_freq + n2 * u_warp + sin((p.y + 0.4) * 1.4 - t * u_flow) * 1.5);
+  float sh = smoothstep(0.15, 0.95, 0.5 + 0.5 * ridge2) * u_shadow;
+  vec3 col = mix(u_deep, u_lit, hi);
+  col = mix(col, u_deep * 0.75, sh * (1.0 - hi));
+  col += (hash(gl_FragCoord.xy) - 0.5) * u_grain;
+  gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`,
+  },
+
 ];
 
 // ---------- live state ----------
