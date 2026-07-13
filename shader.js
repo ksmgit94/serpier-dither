@@ -493,20 +493,19 @@ void main(){
     speed: 0.5,
     controls: [
       { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#000000' },
-      { key: 'u_glass', label: 'Glass', group: 'Colors', type: 'color', value: '#133bff' },
-      { key: 'u_light', label: 'Highlight', group: 'Colors', type: 'color', value: '#ffffff' },
-      { key: 'u_deep', label: 'Shadow', group: 'Colors', type: 'color', value: '#050d3d' },
-      { key: 'u_rows', label: 'Slabs', group: 'Stack', min: 3, max: 16, step: 1, value: 9 },
-      { key: 'u_width', label: 'Width', group: 'Stack', min: 0.15, max: 1.5, step: 0.01, value: 0.3 },
-      { key: 'u_taper', label: 'Taper', group: 'Stack', min: 0, max: 1, step: 0.01, value: 0.5 },
-      { key: 'u_gap', label: 'Gap', group: 'Stack', min: 0, max: 0.2, step: 0.005, value: 0.06 },
-      { key: 'u_round', label: 'Roundness', group: 'Stack', min: 2, max: 10, step: 0.1, value: 5 },
-      { key: 'u_sheen', label: 'Sheen', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.8 },
-      { key: 'u_fresnel', label: 'Edge shade', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.55 },
+      { key: 'u_glass', label: 'Glass', group: 'Colors', type: 'color', value: '#7d9bff' },
+      { key: 'u_light', label: 'Highlight', group: 'Colors', type: 'color', value: '#e9eeff' },
+      { key: 'u_deep', label: 'Deep', group: 'Colors', type: 'color', value: '#133bff' },
+      { key: 'u_rows', label: 'Dishes', group: 'Stack', min: 3, max: 16, step: 1, value: 9 },
+      { key: 'u_width', label: 'Width', group: 'Stack', min: 0.1, max: 1, step: 0.01, value: 0.34 },
+      { key: 'u_asym', label: 'Bowl tilt', group: 'Stack', min: 0, max: 1, step: 0.01, value: 0.5 },
+      { key: 'u_gap', label: 'Gap', group: 'Stack', min: 0, max: 0.3, step: 0.005, value: 0.03 },
+      { key: 'u_sheen', label: 'Sheen', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.9 },
+      { key: 'u_iri', label: 'Pastel lift', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.5 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.5 },
     ],
     frag: GLSL_HEAD + `
-uniform float u_rows, u_width, u_taper, u_gap, u_round, u_sheen, u_fresnel;
+uniform float u_rows, u_width, u_asym, u_gap, u_sheen, u_iri;
 uniform vec3 u_bg, u_glass, u_light, u_deep;
 void main(){
   vec2 uv = gl_FragCoord.xy / u_resolution;
@@ -516,28 +515,30 @@ void main(){
   float rows = max(2.0, u_rows);
   float yr = uv.y * rows;
   float row = floor(yr);
-  float fy = fract(yr) - 0.5;
-  // Alternating taper: odd slabs flare up, even flare down, and the taper
-  // slowly rocks -> the stack reads as tilting glass dishes.
+  float ny = (fract(yr) - 0.5) * 2.0 / max(1.0 - u_gap, 0.05);   // -1..1 inside the lens
+  // Lens/bowl silhouette: a squashed ellipse whose fatness tips up or down,
+  // alternating per row and rocking slowly -> a stack of tilting glass dishes.
   float dir = mix(1.0, -1.0, mod(row, 2.0));
-  float taper = u_taper * dir * (0.7 + 0.3 * sin(t * 0.5 + row * 1.3));
-  float w = u_width * (1.0 - taper * fy * 2.0);
-  float hh = max(0.05, 0.5 - u_gap);
-  vec2 q = vec2(x / max(w, 0.05), fy / hh);
-  float d = pow(abs(q.x), u_round) + pow(abs(q.y), u_round);
-  float inside = 1.0 - smoothstep(0.92, 1.0, d);
-  // Iridescent ramp across the slab, drifting per row.
-  float ph = clamp(q.x * 0.5 + 0.5, 0.0, 1.0);
-  float drift = 0.35 * sin(t * 0.4 + row * 2.1);
-  vec3 col = mix(u_light, u_glass, clamp(ph * 2.6 - 0.1 + drift, 0.0, 1.0));
-  col = mix(col, u_deep, clamp((ph - 0.62 + drift * 0.5) * 2.2, 0.0, 1.0) * 0.85);
-  // Sweeping specular hotspot.
-  float sweep = sin(t * 0.6 + row * 1.7) * 0.6;
-  col = mix(col, u_light, exp(-pow((q.x - sweep) * 2.6, 2.0)) * u_sheen);
-  // Bright top rim, shaded underside, fresnel-dark ends.
-  col = mix(col, u_light, smoothstep(0.55, 0.95, q.y) * 0.5);
-  col = mix(col, u_deep, smoothstep(0.55, 1.0, -q.y) * 0.6);
-  col = mix(col, u_deep, smoothstep(0.6, 1.0, abs(q.x)) * u_fresnel);
+  float asym = u_asym * dir * (0.6 + 0.4 * sin(t * 0.5 + row * 1.3));
+  float env = max(1.0 - ny * ny, 0.0);
+  float hw = u_width * pow(env, clamp(0.32 + asym * ny * 0.4, 0.12, 0.9));
+  hw *= 0.88 + 0.18 * sin(row * 2.7 + 1.0);              // per-dish size variety
+  float inside = smoothstep(0.0, 0.02, hw - abs(x));
+  float nx = clamp(x / max(hw, 0.02), -1.0, 1.0);
+  // Pastel iridescent sweep sliding across each dish.
+  float ir = 0.5 + 0.5 * sin(nx * 2.4 + row * 1.9 + t * 0.4);
+  vec3 col = mix(u_light, u_glass, ir);
+  float ir2 = 0.5 + 0.5 * sin(nx * 1.3 + row * 3.7 - t * 0.3);
+  col = mix(col, u_deep, ir2 * ir2 * 0.5);                                  // saturated patches
+  col = mix(col, u_deep, smoothstep(0.45, 1.0, abs(nx)) * 0.55);            // saturated ends
+  float sweep = sin(t * 0.6 + row * 1.7) * 0.7;
+  col = mix(col, u_light, exp(-pow((nx - sweep) * 3.0, 2.0)) * u_sheen);    // gliding specular
+  col = mix(col, u_light, smoothstep(0.2, 0.9, -ny) * 0.25);                // brighter belly
+  col = mix(col, u_light, u_iri * 0.25);                                    // glossy pastel lift
+  // Thin dark seams where dishes touch, darkened silhouette edge.
+  float seam = smoothstep(0.72, 1.0, abs(ny));
+  float rim = 1.0 - smoothstep(0.0, 0.035, hw - abs(x));
+  col *= 1.0 - 0.5 * max(seam, rim);
   col = mix(u_bg, col, inside);
   gl_FragColor = vec4(col, 1.0);
 }`,
@@ -554,11 +555,11 @@ void main(){
       { key: 'u_hot', label: 'Hot core', group: 'Colors', type: 'color', value: '#cdd9ff' },
       { key: 'u_size', label: 'Light size', group: 'Light', min: 0.08, max: 0.6, step: 0.005, value: 0.3 },
       { key: 'u_travel', label: 'Drift range', group: 'Light', min: 0, max: 0.45, step: 0.005, value: 0.18 },
-      { key: 'u_glow', label: 'Intensity', group: 'Light', min: 0.3, max: 3, step: 0.05, value: 1.7 },
-      { key: 'u_hotamt', label: 'Core heat', group: 'Light', min: 0, max: 1, step: 0.01, value: 0.35 },
-      { key: 'u_bands', label: 'Blinds', group: 'Blinds', min: 2, max: 18, step: 1, value: 9 },
+      { key: 'u_glow', label: 'Intensity', group: 'Light', min: 0.3, max: 3, step: 0.05, value: 1.4 },
+      { key: 'u_hotamt', label: 'Core heat', group: 'Light', min: 0, max: 1, step: 0.01, value: 0.25 },
+      { key: 'u_bands', label: 'Blinds', group: 'Blinds', min: 2, max: 18, step: 1, value: 8 },
       { key: 'u_slit', label: 'Slit width', group: 'Blinds', min: 0.005, max: 0.15, step: 0.005, value: 0.035 },
-      { key: 'u_lens', label: 'Lens fade', group: 'Blinds', min: 0.1, max: 3, step: 0.05, value: 0.6 },
+      { key: 'u_lens', label: 'Lens fade', group: 'Blinds', min: 0.1, max: 3, step: 0.05, value: 0.8 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
     ],
     frag: GLSL_HEAD + `
@@ -572,9 +573,9 @@ void main(){
   // A cluster of soft lobes drifts up and down behind fixed blinds.
   float y0 = sin(t * 0.35) * u_travel;
   float s = u_size * (1.0 + 0.1 * sin(t * 0.5));
-  vec2 d1 = (p - vec2(0.0, y0 + 0.08)) * vec2(1.35, 1.4);
-  vec2 d2 = (p - vec2(0.0, y0 - 0.18)) * vec2(1.5, 1.6);
-  vec2 d3 = (p - vec2(0.0, y0 + 0.32)) * vec2(1.7, 1.8);
+  vec2 d1 = (p - vec2(0.0, y0 + 0.08)) * vec2(1.8, 1.4);
+  vec2 d2 = (p - vec2(0.0, y0 - 0.18)) * vec2(2.0, 1.6);
+  vec2 d3 = (p - vec2(0.0, y0 + 0.32)) * vec2(2.2, 1.8);
   float g = exp(-dot(d1, d1) / (s * s));
   g += 0.75 * exp(-dot(d2, d2) / (s * s));
   g += 0.45 * exp(-dot(d3, d3) / (s * s));
@@ -583,7 +584,7 @@ void main(){
   float sb = fract(uv.y * u_bands);
   float slit = smoothstep(u_slit, u_slit + 0.025, sb) * (1.0 - smoothstep(1.0 - u_slit - 0.025, 1.0 - u_slit, sb));
   float lens = pow(max(sin(sb * 3.14159), 0.0), u_lens);
-  g *= slit * mix(0.25, 1.0, lens);
+  g *= slit * mix(0.15, 1.0, lens);
   vec3 col = u_bg + u_c * g + u_hot * g * g * u_hotamt;
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`,
@@ -603,10 +604,10 @@ void main(){
       { key: 'u_stagger', label: 'Stagger', group: 'Layout', min: 0, max: 1, step: 0.01, value: 0.5 },
       { key: 'u_widen', label: 'Widen right', group: 'Layout', min: 0.4, max: 1.5, step: 0.05, value: 0.65 },
       { key: 'u_margin', label: 'Margin', group: 'Layout', min: 0, max: 0.15, step: 0.005, value: 0.035 },
-      { key: 'u_fade', label: 'Fade width', group: 'Gradient', min: 0.1, max: 1, step: 0.01, value: 0.55 },
+      { key: 'u_fade', label: 'Fade width', group: 'Gradient', min: 0.1, max: 1, step: 0.01, value: 0.45 },
       { key: 'u_vshade', label: 'Panel shading', group: 'Gradient', min: 0, max: 1, step: 0.01, value: 0.15 },
       { key: 'u_pulse', label: 'Breath', group: 'Gradient', min: 0, max: 0.5, step: 0.01, value: 0.1 },
-      { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.8, step: 0.005, value: 0.35 },
+      { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.8, step: 0.005, value: 0.3 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
     ],
     frag: GLSL_HEAD + `
@@ -628,7 +629,8 @@ void main(){
   // Locked grid; each panel's gradient breathes on its own phase, so a
   // slow shimmer wanders across the wall like light over paper.
   float breathe = sin(t * 0.5 + hash(vec2(ci * 7.31, ri * 3.17)) * 6.2831) * u_pulse;
-  float g = smoothstep(0.02, max(u_fade + breathe, 0.15), cf);  // light left edge -> saturated right
+  float vary = (hash(vec2(ri * 5.7, ci * 2.3)) - 0.5) * 0.7 * u_fade;   // per-panel fade variety
+  float g = smoothstep(0.02, max(u_fade + breathe + vary, 0.15), cf);  // light left edge -> saturated right
   g += (0.5 - rf) * u_vshade;
   g = clamp(g, 0.0, 1.0);
   // Print grain, concentrated in the fade zone like a risograph.
@@ -646,16 +648,16 @@ void main(){
     component: 'SlicedOrbBackground',
     speed: 0.6,
     controls: [
-      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#000000' },
-      { key: 'u_top', label: 'Top light', group: 'Colors', type: 'color', value: '#f0f3ff' },
+      { key: 'u_bg', label: 'Background', group: 'Colors', type: 'color', value: '#01030f' },
+      { key: 'u_top', label: 'Top light', group: 'Colors', type: 'color', value: '#eef2ff' },
       { key: 'u_mid', label: 'Body', group: 'Colors', type: 'color', value: '#133bff' },
-      { key: 'u_low', label: 'Base', group: 'Colors', type: 'color', value: '#050d3a' },
+      { key: 'u_low', label: 'Base', group: 'Colors', type: 'color', value: '#0a1660' },
       { key: 'u_radius', label: 'Radius', group: 'Orb', min: 0.1, max: 0.48, step: 0.005, value: 0.36 },
-      { key: 'u_soft', label: 'Edge softness', group: 'Orb', min: 0.002, max: 0.08, step: 0.001, value: 0.015 },
+      { key: 'u_soft', label: 'Edge softness', group: 'Orb', min: 0.002, max: 0.1, step: 0.001, value: 0.03 },
       { key: 'u_glow', label: 'Halo', group: 'Orb', min: 0, max: 1, step: 0.01, value: 0.3 },
       { key: 'u_slices', label: 'Slices', group: 'Slices', min: 4, max: 28, step: 1, value: 12 },
-      { key: 'u_gap', label: 'Gap', group: 'Slices', min: 0.02, max: 0.4, step: 0.01, value: 0.1 },
-      { key: 'u_toplit', label: 'Slat lighting', group: 'Slices', min: 0, max: 1, step: 0.01, value: 0.35 },
+      { key: 'u_gap', label: 'Gap', group: 'Slices', min: 0.02, max: 0.4, step: 0.01, value: 0.12 },
+      { key: 'u_toplit', label: 'Slat lighting', group: 'Slices', min: 0, max: 1, step: 0.01, value: 0.3 },
       { key: 'u_wobble', label: 'Wobble', group: 'Slices', min: 0, max: 0.2, step: 0.002, value: 0.05 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
     ],
@@ -683,8 +685,9 @@ void main(){
   col *= mix(0.6, 1.0, sqrt(max(1.0 - rr * rr, 0.0)));
   // Thin dark slits; each slat catches light along its top edge.
   float gh = u_gap * 0.5;
-  float slit = smoothstep(gh, gh + 0.02, sb) * (1.0 - smoothstep(1.0 - gh - 0.02, 1.0 - gh, sb));
+  float slit = smoothstep(gh, gh + 0.045, sb) * (1.0 - smoothstep(1.0 - gh - 0.045, 1.0 - gh, sb));
   col *= mix(1.0 - u_toplit * 0.6, 1.0 + u_toplit * 0.35, smoothstep(0.05, 0.95, sb));
+  col += u_top * pow(s, 3.0) * 0.25;                     // luminous crown
   float halo = exp(-max(r - rad, 0.0) * 10.0) * u_glow;
   vec3 outCol = mix(u_bg, col, body * slit);
   outCol += u_mid * halo * (1.0 - body * slit) * 0.4;
@@ -698,14 +701,14 @@ void main(){
     component: 'WaveCurtainBackground',
     speed: 0.6,
     controls: [
-      { key: 'u_lit', label: 'Lit', group: 'Colors', type: 'color', value: '#6f88ff' },
-      { key: 'u_deep', label: 'Deep', group: 'Colors', type: 'color', value: '#0c22ac' },
+      { key: 'u_lit', label: 'Lit', group: 'Colors', type: 'color', value: '#7188ff' },
+      { key: 'u_deep', label: 'Deep', group: 'Colors', type: 'color', value: '#0b21a8' },
       { key: 'u_freq', label: 'Tongues', group: 'Waves', min: 2, max: 14, step: 0.5, value: 6 },
       { key: 'u_scale', label: 'Wave height', group: 'Waves', min: 0.5, max: 6, step: 0.05, value: 2.5 },
       { key: 'u_warp', label: 'Warp', group: 'Waves', min: 0, max: 6, step: 0.05, value: 4 },
       { key: 'u_flow', label: 'Flow', group: 'Waves', min: 0, max: 3, step: 0.05, value: 1 },
-      { key: 'u_sharp', label: 'Falloff', group: 'Waves', min: 0.3, max: 4, step: 0.05, value: 2.2 },
-      { key: 'u_shadow', label: 'Shadow', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.6 },
+      { key: 'u_sharp', label: 'Falloff', group: 'Waves', min: 0.3, max: 4, step: 0.05, value: 1.8 },
+      { key: 'u_shadow', label: 'Shadow', group: 'Shading', min: 0, max: 1, step: 0.01, value: 0.75 },
       { key: 'u_grain', label: 'Grain', group: 'Texture', min: 0, max: 0.3, step: 0.005, value: 0.1 },
       { key: '__speed', label: 'Animation speed', group: 'Animation', min: 0, max: 2, step: 0.01, value: 0.6 },
     ],
@@ -720,11 +723,14 @@ void main(){
   // melting continuously so the pattern never visibly repeats.
   float yy = uv.y * u_scale * 3.14159;
   float n = fbm(vec2(uv.x * 3.0, uv.y * u_scale * 1.5 - t));
-  float bend = sin(yy + uv.x * 2.0 - t * u_flow * 3.0 + n * 2.5) * 1.3 + n * u_warp;
+  float bend = sin(yy + uv.x * 2.0 - t * u_flow * 3.0 + n * 2.5) * 1.6 + n * u_warp;
   float f = fract(uv.x * u_freq + bend / 6.2831);
-  float lum = pow(1.0 - f, u_sharp);                     // lit flank decays across each tongue
-  float crease = smoothstep(0.78, 1.0, f) * u_shadow;    // dark cut where tongues overlap
+  // Tongues sit on a mid tone: narrow lit ridge on one flank, narrow dark
+  // crease where they overlap, gentle falloff in between.
+  float lum = 0.35 + 0.42 * pow(1.0 - f, u_sharp);
+  float crease = smoothstep(0.72, 1.0, f) * u_shadow;
   vec3 col = mix(u_deep, u_lit, lum);
+  col = mix(col, u_lit, smoothstep(0.1, 0.02, f) * 0.35);   // ridge highlight
   col = mix(col, u_deep * 0.6, crease);
   col += (hash(gl_FragCoord.xy) - 0.5) * u_grain;
   gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
